@@ -1,17 +1,23 @@
 /// Bridge to the in-tree Android plugin `com.splode.pomotroid.TimerServicePlugin`.
 ///
-/// Kotlin methods (see `gen/android/app/src/main/java/com/splode/pomotroid/`):
+/// Kotlin methods (see `src-tauri/android-plugin/`):
 ///   - `update { roundType, elapsedSecs, totalSecs, isRunning, isPaused, roundNumber, roundsTotal }`
 ///       → start/refresh/stop the foreground service and its countdown notification
 ///   - `roundChanged { roundType, title, body }`
 ///       → heads-up notification for the new round
 ///   - `playSound { path, volume }`
 ///       → play an audio file with MediaPlayer (works in the background)
-///   - `stop`
-///       → tear the service down (app exit / disconnect)
+///   - `takeActions {}`
+///       → drain notification-action taps queued by the service
+///   - `stop {}`
+///       → tear the service down
 ///
-/// The Kotlin side raises the `timer-action` plugin event when the user taps
-/// a notification action; Rust maps it onto `TimerController`.
+/// Notification actions travel the other way. Tauri's Kotlin `trigger()`
+/// delivers events to the **webview**, which Android pauses while the app is
+/// in the background — exactly when someone taps Pause in the notification. So
+/// the service queues taps instead, and a small Rust thread drains that queue
+/// and applies them. Polling only runs while the service is up (the timer is
+/// running or paused), which is the only time an action can be queued.
 use tauri::AppHandle;
 
 use crate::timer::TimerSnapshot;
@@ -45,59 +51,101 @@ mod imp {
 #[cfg(mobile)]
 mod imp {
     use super::*;
-    use serde::Deserialize;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
     use tauri::plugin::{Builder, PluginHandle, TauriPlugin};
-    use tauri::{Listener, Manager, Wry};
+    use tauri::{Manager, Wry};
 
     /// Managed handle to the Kotlin plugin instance.
     pub struct TimerServiceHandle(pub PluginHandle<Wry>);
 
-    #[derive(Deserialize)]
-    struct ActionEvent {
-        action: String,
-    }
+    /// True while the foreground service (and therefore its notification) exists.
+    static SERVICE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-    /// Build the Tauri plugin that registers the Kotlin class and wires
-    /// notification actions back into the timer.
+    /// How often queued notification actions are collected while the service is up.
+    const POLL_ACTIVE: Duration = Duration::from_millis(700);
+    /// Idle back-off: without a notification nothing can queue an action.
+    const POLL_IDLE: Duration = Duration::from_secs(3);
+
+    /// Build the Tauri plugin that registers the Kotlin class and starts the
+    /// thread that applies notification-action taps.
     pub fn init() -> TauriPlugin<Wry> {
         Builder::new("timer-service")
-            .setup(|app, api| {
+            .setup(|app, _api| {
                 #[cfg(target_os = "android")]
                 {
-                    let handle = api.register_android_plugin("com.splode.pomotroid", "TimerServicePlugin")?;
+                    let handle =
+                        _api.register_android_plugin("com.splode.pomotroid", "TimerServicePlugin")?;
                     app.manage(TimerServiceHandle(handle));
                 }
-                for event_name in ["plugin:timer-service:action", "timer-service://action"] {
-                let app_c = app.clone();
-                app.listen(event_name, move |event| {
-                    let Ok(ev) = serde_json::from_str::<ActionEvent>(event.payload()) else { return };
-                    log::info!("[timer-service] notification action: {}", ev.action);
-                    if crate::remote::is_active(&app_c) {
-                        let msg = match ev.action.as_str() {
-                            "toggle" => "toggle",
-                            "skip" => "skip",
-                            "reset" => "reset",
-                            _ => return,
-                        };
-                        let app2 = app_c.clone();
-                        std::thread::spawn(move || {
-                            let _ = crate::remote::forward::<()>(&app2, serde_json::json!({ "type": msg }));
-                        });
-                        return;
-                    }
-                    if let Some(timer) = app_c.try_state::<crate::timer::TimerController>() {
-                        match ev.action.as_str() {
-                            "toggle" => timer.toggle(),
-                            "skip" => timer.skip(),
-                            "reset" => timer.reset(),
-                            _ => {}
-                        }
-                    }
-                });
-                }
+                let app_handle = app.clone();
+                std::thread::Builder::new()
+                    .name("timer-service-actions".into())
+                    .spawn(move || action_loop(app_handle))
+                    .ok();
                 Ok(())
             })
             .build()
+    }
+
+    fn action_loop(app: AppHandle) {
+        loop {
+            let active = SERVICE_ACTIVE.load(Ordering::Relaxed);
+            std::thread::sleep(if active { POLL_ACTIVE } else { POLL_IDLE });
+            if !SERVICE_ACTIVE.load(Ordering::Relaxed) {
+                continue;
+            }
+            for action in take_actions(&app) {
+                log::info!("[timer-service] notification action: {action}");
+                apply_action(&app, &action);
+            }
+        }
+    }
+
+    fn take_actions(app: &AppHandle) -> Vec<String> {
+        let Some(h) = app.try_state::<TimerServiceHandle>() else {
+            return Vec::new();
+        };
+        match h
+            .0
+            .run_mobile_plugin::<serde_json::Value>("takeActions", serde_json::json!({}))
+        {
+            Ok(v) => v
+                .get("actions")
+                .and_then(|a| a.as_str())
+                .unwrap_or("")
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect(),
+            Err(e) => {
+                log::warn!("[timer-service] takeActions failed: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Apply one notification action to whichever timer this device follows.
+    fn apply_action(app: &AppHandle, action: &str) {
+        if crate::remote::is_active(app) {
+            if !matches!(action, "toggle" | "skip" | "reset") {
+                return;
+            }
+            let msg = action.to_string();
+            let app2 = app.clone();
+            std::thread::spawn(move || {
+                let _ = crate::remote::forward::<()>(&app2, serde_json::json!({ "type": msg }));
+            });
+            return;
+        }
+        if let Some(timer) = app.try_state::<crate::timer::TimerController>() {
+            match action {
+                "toggle" => timer.toggle(),
+                "skip" => timer.skip(),
+                "reset" => timer.reset(),
+                _ => {}
+            }
+        }
     }
 
     fn call(app: &AppHandle, method: &str, payload: serde_json::Value) {
@@ -109,6 +157,7 @@ mod imp {
     }
 
     pub fn update(app: &AppHandle, snap: &TimerSnapshot) {
+        SERVICE_ACTIVE.store(snap.is_running || snap.is_paused, Ordering::Relaxed);
         call(
             app,
             "update",
@@ -147,6 +196,7 @@ mod imp {
     }
 
     pub fn stop(app: &AppHandle) {
+        SERVICE_ACTIVE.store(false, Ordering::Relaxed);
         call(app, "stop", serde_json::json!({}));
     }
 }

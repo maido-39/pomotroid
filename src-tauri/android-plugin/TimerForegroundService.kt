@@ -5,15 +5,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 
@@ -96,7 +95,6 @@ object TimerNotifications {
  */
 class TimerForegroundService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
-    private var receiver: BroadcastReceiver? = null
     private var started = false
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -104,22 +102,15 @@ class TimerForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         TimerNotifications.ensureChannels(this)
-        receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                val action = intent.getStringExtra(EXTRA_ACTION) ?: return
-                TimerActionBus.emit(action)
-            }
-        }
-        val filter = IntentFilter(ACTION_NOTIFICATION_ACTION)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            registerReceiver(receiver, filter)
-        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_NOTIFICATION_ACTION) {
+            val action = intent.getStringExtra(EXTRA_ACTION)
+            Log.i(TAG, "notification action: $action")
+            if (action != null) TimerActionBus.emit(action)
+            return START_STICKY
+        }
         if (intent == null || intent.action != ACTION_UPDATE) {
             return START_STICKY
         }
@@ -204,10 +195,10 @@ class TimerForegroundService : Service() {
     }
 
     private fun actionIntent(action: String): PendingIntent {
-        val intent = Intent(ACTION_NOTIFICATION_ACTION)
-            .setPackage(packageName)
+        val intent = Intent(this, TimerForegroundService::class.java)
+            .setAction(ACTION_NOTIFICATION_ACTION)
             .putExtra(EXTRA_ACTION, action)
-        return PendingIntent.getBroadcast(
+        return PendingIntent.getService(
             this,
             action.hashCode(),
             intent,
@@ -231,8 +222,6 @@ class TimerForegroundService : Service() {
 
     override fun onDestroy() {
         releaseWakeLock()
-        receiver?.let { runCatching { unregisterReceiver(it) } }
-        receiver = null
         started = false
         super.onDestroy()
     }
@@ -248,6 +237,7 @@ class TimerForegroundService : Service() {
         const val EXTRA_PAUSED = "paused"
         const val EXTRA_ROUND_NUMBER = "roundNumber"
         const val EXTRA_ROUNDS_TOTAL = "roundsTotal"
+        const val TAG = "TimerForegroundService"
 
         @Suppress("unused")
         fun unusedTimeBase() = SystemClock.elapsedRealtime()

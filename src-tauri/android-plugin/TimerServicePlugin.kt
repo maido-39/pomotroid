@@ -58,15 +58,6 @@ class PlaySoundArgs {
 class TimerServicePlugin(private val activity: Activity) : Plugin(activity) {
     private var player: MediaPlayer? = null
 
-    override fun load(webView: android.webkit.WebView) {
-        super.load(webView)
-        TimerActionBus.listener = { action ->
-            val payload = JSObject()
-            payload.put("action", action)
-            trigger("action", payload)
-        }
-    }
-
     private fun notificationsAllowed(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
         return ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) ==
@@ -156,6 +147,18 @@ class TimerServicePlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    /**
+     * Hand Rust the notification-action taps queued since the last call, as a
+     * comma-separated list. Rust polls this because Tauri's `trigger()` only
+     * reaches the webview, which is paused while the app is in the background.
+     */
+    @Command
+    fun takeActions(invoke: Invoke) {
+        val ret = JSObject()
+        ret.put("actions", TimerActionBus.drain().joinToString(","))
+        invoke.resolve(ret)
+    }
+
     /** Stop the foreground service and any sound. */
     @Command
     fun stop(invoke: Invoke) {
@@ -177,16 +180,23 @@ class TimerServicePlugin(private val activity: Activity) : Plugin(activity) {
     }
 }
 
-/** Delivers notification-action taps from the service to the plugin instance. */
+/**
+ * Queue of notification-action taps, filled by TimerForegroundService and
+ * drained by Rust through the `takeActions` command.
+ */
 object TimerActionBus {
-    var listener: ((String) -> Unit)? = null
+    private val pending = java.util.concurrent.ConcurrentLinkedQueue<String>()
 
     fun emit(action: String) {
-        val l = listener
-        if (l != null) {
-            l(action)
-        } else {
-            Log.w(TimerServicePlugin.TAG, "no listener for action $action")
+        pending.add(action)
+        Log.i(TimerServicePlugin.TAG, "queued action $action")
+    }
+
+    fun drain(): List<String> {
+        val out = mutableListOf<String>()
+        while (true) {
+            out.add(pending.poll() ?: break)
         }
+        return out
     }
 }
