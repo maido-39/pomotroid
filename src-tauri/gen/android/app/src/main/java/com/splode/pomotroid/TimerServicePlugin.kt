@@ -2,7 +2,6 @@ package com.splode.pomotroid
 
 import android.Manifest
 import android.app.Activity
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
@@ -182,7 +181,7 @@ class TimerServicePlugin(private val activity: Activity) : Plugin(activity) {
 object TimerActionBus {
     var listener: ((String) -> Unit)? = null
 
-    fun emit(context: Context, action: String) {
+    fun emit(action: String) {
         val l = listener
         if (l != null) {
             l(action)

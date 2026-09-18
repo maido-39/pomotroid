@@ -184,6 +184,7 @@ pub fn settings_set_impl(app: &AppHandle, key: &str, value: &str) -> Result<Sett
     // Apply always-on-top window flag immediately when the setting changes,
     // accounting for the current round type so break_always_on_top takes
     // effect without waiting for the next round transition.
+    #[cfg(desktop)]
     if matches!(key, "always_on_top" | "break_always_on_top") {
         if let Some(window) = app.get_webview_window("main") {
             let snap = timer.get_snapshot();

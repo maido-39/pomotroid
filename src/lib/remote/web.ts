@@ -76,9 +76,36 @@ function target(): { host: string; port: number; token: string } {
   return { host: url.hostname, port: Number(url.port || (url.protocol === 'https:' ? 443 : 80)), token };
 }
 
+// Callers that arrive before the socket has authenticated wait here rather
+// than failing: components request state in onMount, which runs while the
+// WebSocket handshake is still in flight.
+let connectWaiters: Array<() => void> = [];
+
 function setStatus(patch: Partial<RemoteStatus>) {
+  const was = status.state;
   status = { ...status, ...patch };
   emit('remote:status', status);
+  if (status.state === 'connected' && was !== 'connected') {
+    const waiters = connectWaiters;
+    connectWaiters = [];
+    waiters.forEach((resolve) => resolve());
+  }
+}
+
+function waitForConnection(timeoutMs = 10000): Promise<void> {
+  if (status.state === 'connected') return Promise.resolve();
+  if (status.state === 'error') return Promise.reject(new Error(status.error ?? 'connection failed'));
+  return new Promise((resolve, reject) => {
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      connectWaiters = connectWaiters.filter((w) => w !== done);
+      reject(new Error('not connected to desktop'));
+    }, timeoutMs);
+    connectWaiters.push(done);
+  });
 }
 
 export function connect(): void {
@@ -140,9 +167,11 @@ export function connect(): void {
   };
 }
 
-function request<T = unknown>(msg: Record<string, unknown>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    if (!socket || socket.readyState !== WebSocket.OPEN || status.state !== 'connected') {
+async function request<T = unknown>(msg: Record<string, unknown>): Promise<T> {
+  connect();
+  await waitForConnection();
+  return new Promise<T>((resolve, reject) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
       reject(new Error('not connected to desktop'));
       return;
     }

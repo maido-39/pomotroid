@@ -107,7 +107,7 @@ class TimerForegroundService : Service() {
         receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 val action = intent.getStringExtra(EXTRA_ACTION) ?: return
-                TimerActionBus.emit(context, action)
+                TimerActionBus.emit(action)
             }
         }
         val filter = IntentFilter(ACTION_NOTIFICATION_ACTION)
@@ -163,7 +163,11 @@ class TimerForegroundService : Service() {
     ): Notification {
         val remaining = (total - elapsed).coerceAtLeast(0)
         val label = TimerNotifications.roundLabel(roundType)
-        val state = if (running) "$label · round $roundNumber/$roundsTotal" else "$label · paused"
+        val state = when {
+            running -> "$label · round $roundNumber/$roundsTotal"
+            paused -> "$label · paused"
+            else -> label
+        }
 
         val builder = NotificationCompat.Builder(this, TimerNotifications.CHANNEL_ONGOING)
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)

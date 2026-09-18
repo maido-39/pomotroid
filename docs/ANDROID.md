@@ -66,6 +66,41 @@ python scripts/sync_android.py
 
 Re-run it after any `tauri android init` that regenerates the project.
 
+## Windows gotchas
+
+Two environment problems will stop the build; neither is a code issue.
+
+**Symlink permission.** `tauri android build` links the compiled `.so` into
+`gen/android/app/src/main/jniLibs/<abi>/`, and Windows only allows creating
+symlinks with Developer Mode enabled (Settings → System → For developers) or
+from an elevated shell. Without it the build stops at:
+
+```
+Failed to create a symbolic link ... Creation symbolic link is not allowed for this system.
+```
+
+If you cannot enable Developer Mode, copy the library in yourself and let
+Gradle skip the task that creates the link:
+
+```bash
+cp src-tauri/target/aarch64-linux-android/debug/libpomotroid_lib.so \
+   src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/
+cd src-tauri/gen/android
+./gradlew assembleArm64Debug -x rustBuildArm64Debug
+```
+
+The cargo build must have run first; `tauri android build` does that before it
+fails on the symlink, so simply re-running the Gradle command afterwards works.
+
+**Gradle's JDK needs network access.** Gradle downloads its own distribution
+and the Android Gradle Plugin on first use. If endpoint-security software
+blocks the particular `java.exe` that `JAVA_HOME` points at, every download
+fails with `java.net.SocketException: Permission denied: getsockopt` even
+though the firewall is off and other tools reach the same hosts. Point
+`JAVA_HOME` at a JDK that is already allowed (for example the one Gradle
+manages under `~/.gradle/jdks/`) or have the security software allow the new
+one.
+
 ## Build and run
 
 ```bash
@@ -80,6 +115,9 @@ The APK is written to
 `src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk`
 (`x86_64/` for the emulator, `universal/` when no `--target` is given). Install
 it with `adb install -r <path>`.
+
+A debug APK is large (~150 MB) because the Rust library keeps its debug
+symbols; a release build is a fraction of that.
 
 The first Gradle run downloads the wrapper and the Android toolchain — budget
 15–20 minutes and a few GB.

@@ -375,12 +375,15 @@ fn listen_events(
                     let s = settings.lock().unwrap();
                     (s.always_on_top, s.break_always_on_top)
                 };
+                #[cfg(desktop)]
                 if always_on_top {
                     if let Some(window) = app.get_webview_window("main") {
                         let is_break = next_round != RoundType::Work;
                         let _ = window.set_always_on_top(!(break_always_on_top && is_break));
                     }
                 }
+                #[cfg(mobile)]
+                let _ = (always_on_top, break_always_on_top);
 
                 // Update tray to reflect new round type and reset progress.
                 // Use -1.0 (same as initialisation and Reset) so the very

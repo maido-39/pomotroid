@@ -47,10 +47,10 @@ mod imp {
     use super::*;
     use serde::Deserialize;
     use tauri::plugin::{Builder, PluginHandle, TauriPlugin};
-    use tauri::{Listener, Manager, Runtime};
+    use tauri::{Listener, Manager, Wry};
 
     /// Managed handle to the Kotlin plugin instance.
-    pub struct TimerServiceHandle<R: Runtime>(pub PluginHandle<R>);
+    pub struct TimerServiceHandle(pub PluginHandle<Wry>);
 
     #[derive(Deserialize)]
     struct ActionEvent {
@@ -59,7 +59,7 @@ mod imp {
 
     /// Build the Tauri plugin that registers the Kotlin class and wires
     /// notification actions back into the timer.
-    pub fn init<R: Runtime>() -> TauriPlugin<R> {
+    pub fn init() -> TauriPlugin<Wry> {
         Builder::new("timer-service")
             .setup(|app, api| {
                 #[cfg(target_os = "android")]
@@ -101,7 +101,7 @@ mod imp {
     }
 
     fn call(app: &AppHandle, method: &str, payload: serde_json::Value) {
-        if let Some(h) = app.try_state::<TimerServiceHandle<tauri::Wry>>() {
+        if let Some(h) = app.try_state::<TimerServiceHandle>() {
             if let Err(e) = h.0.run_mobile_plugin::<serde_json::Value>(method, payload) {
                 log::warn!("[timer-service] {method} failed: {e}");
             }
@@ -136,7 +136,7 @@ mod imp {
 
     pub fn play_file(app: &AppHandle, path: &std::path::Path, volume: f32) -> Result<(), String> {
         let h = app
-            .try_state::<TimerServiceHandle<tauri::Wry>>()
+            .try_state::<TimerServiceHandle>()
             .ok_or_else(|| "timer service plugin not registered".to_string())?;
         h.0.run_mobile_plugin::<serde_json::Value>(
             "playSound",
