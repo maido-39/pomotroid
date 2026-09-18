@@ -41,6 +41,17 @@ export interface Settings {
   shortcut_restart: string;
   websocket_enabled: boolean;
   websocket_port: number;
+  websocket_lan_enabled: boolean;
+  websocket_token: string;
+  sound_work_alert: string; // 'default' | preset id
+  sound_short_break_alert: string;
+  sound_long_break_alert: string;
+  sound_tick: string;
+  bg_image_enabled: boolean;
+  bg_image_opacity: number; // 0–100
+  bg_image_blur: number; // px, 0–40
+  bg_image_brightness: number; // %, 20–150
+  bg_image_name: string; // '' = none
   theme_mode: string; // 'auto' | 'light' | 'dark'
   theme_light: string;
   theme_dark: string;
@@ -65,11 +76,55 @@ export interface UpdateInfo {
   date: string | null;
 }
 
-/** Mirrors Rust `CustomAudioInfo` — null means the built-in sound is active. */
+/** Mirrors Rust `CustomAudioInfo` — null means no custom file (preset/built-in is active). */
 export interface CustomAudioInfo {
   work_alert: string | null;
   short_break_alert: string | null;
   long_break_alert: string | null;
+  tick: string | null;
+}
+
+/** IPC identifier of an audio cue slot. */
+export type AudioCueKey = keyof CustomAudioInfo;
+
+/** Mirrors Rust `remote::RemoteStatus`. */
+export interface RemoteStatus {
+  mode: 'local' | 'remote';
+  state: 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error';
+  host: string;
+  port: number;
+  token: string;
+  desktop_name: string;
+  error: string | null;
+}
+
+/** Mirrors Rust `remote::PairingTarget`. */
+export interface PairingTarget {
+  host: string;
+  port: number;
+  token: string;
+}
+
+/** Mirrors Rust `websocket::PairingInfo` (desktop side of pairing). */
+export interface PairingInfo {
+  hosts: string[];
+  port: number;
+  token: string;
+  url: string;
+  lan_enabled: boolean;
+  clients: number;
+}
+
+/** Payload of the `websocket:clients` event. */
+export interface WsClients {
+  connected: number;
+  authed: number;
+}
+
+/** Returned by `background_get` — null when no image is configured. */
+export interface BackgroundInfo {
+  name: string;
+  data_url: string;
 }
 
 /** Mirrors Rust `Theme` struct. Color keys include the `--` CSS var prefix. */

@@ -12,7 +12,7 @@
     onTimerResumed,
     onRoundChange,
     onTimerReset,
-  } from '$lib/ipc';
+  } from '$lib/backend';
   import { timerState } from '$lib/stores/timer';
   import { settings } from '$lib/stores/settings';
   import { fade } from 'svelte/transition';
@@ -23,7 +23,7 @@
   import Tooltip from './Tooltip.svelte';
   import type { UnlistenFn } from '@tauri-apps/api/event';
   import * as m from '$paraglide/messages.js';
-  import { notificationShow } from '$lib/ipc';
+  import { notificationShow } from '$lib/backend';
 
   interface Props {
     isCompact?: boolean;

@@ -2,8 +2,9 @@
   import { onMount } from 'svelte';
   import { openUrl } from '@tauri-apps/plugin-opener';
 
-  import { info, warn, error as logError } from '@tauri-apps/plugin-log';
-  import { openLogDir, appVersion, checkUpdate, installUpdate } from '$lib/ipc';
+  import { info, warn, error as logError } from '$lib/utils/log';
+  import { openLogDir, appVersion, checkUpdate, installUpdate } from '$lib/backend';
+  import { useInAppNav } from '$lib/utils/platform';
   import { settings } from '$lib/stores/settings';
   import type { UpdateInfo } from '$lib/types';
   import * as m from '$paraglide/messages.js';
@@ -34,7 +35,7 @@
       version = BASE_VERSION;
     }
 
-    if ($settings.check_for_updates) {
+    if ($settings.check_for_updates && !useInAppNav) {
       updateState = 'checking';
       await info('[about] checking for updates');
       try {
@@ -121,7 +122,7 @@
         />
       </svg>
     </button>
-    <button class="link-row" onclick={openLogDir}>
+    <button class="link-row" onclick={openLogDir} hidden={useInAppNav}>
       <span>{m.about_open_log_folder()}</span>
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
         <path
@@ -134,7 +135,7 @@
     </button>
   </div>
 
-  {#if $settings.check_for_updates || updateState !== 'idle'}
+  {#if !useInAppNav && ($settings.check_for_updates || updateState !== 'idle')}
     <div class="update-group">
       {#if updateState === 'idle' || updateState === 'checking'}
         <div class="update-row update-row--muted">

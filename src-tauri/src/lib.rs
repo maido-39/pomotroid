@@ -1,7 +1,10 @@
 pub mod audio;
+pub mod background;
 pub mod commands;
 pub mod db;
+pub mod mobile;
 pub mod notifications;
+pub mod remote;
 pub mod settings;
 pub mod shortcuts;
 pub mod themes;
@@ -21,34 +24,57 @@ use commands::{
     app_version,
     check_update,
     install_update,
-    audio_clear_custom, audio_get_custom_info, audio_set_custom,
+    audio_clear_custom, audio_get_custom_info, audio_presets, audio_preview, audio_set_custom, audio_set_custom_bytes,
+    background_clear_custom, background_get, background_set_custom, background_set_custom_bytes,
     get_log_dir, open_log_dir,
     notification_show,
+    remote_connect, remote_disconnect, remote_parse_pairing, remote_status,
     settings_get, settings_reset_defaults, settings_set,
     shortcuts_reload,
     sessions_clear,
     stats_get_detailed, stats_get_heatmap,
     themes_list,
     timer_get_state, timer_reset, timer_restart_round, timer_skip, timer_toggle,
+    websocket_pairing_info, websocket_regenerate_token,
     window_set_visibility,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let log_targets = {
+        let mut t = vec![Target::new(TargetKind::LogDir { file_name: None })];
+        // On Android also mirror to logcat for `adb logcat` debugging.
+        if cfg!(mobile) {
+            t.push(Target::new(TargetKind::Stdout));
+        }
+        t
+    };
+
+    let builder = tauri::Builder::default()
         .plugin(
             LogBuilder::new()
-                .targets([Target::new(TargetKind::LogDir { file_name: None })])
+                .targets(log_targets)
                 .max_file_size(5 * 1024 * 1024)
                 .rotation_strategy(RotationStrategy::KeepOne)
                 .level(LevelFilter::Debug)
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init());
+
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build());
+
+    #[cfg(mobile)]
+    let builder = builder
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_barcode_scanner::init())
+        .plugin(mobile::timer_service::init());
+
+    builder
         .setup(|app| {
             // Capture Rust panics to the log file before the process terminates.
             std::panic::set_hook(Box::new(|info| {
@@ -94,6 +120,9 @@ pub fn run() {
             let tray_state = tray::TrayState::new();
             app.manage(Arc::clone(&tray_state));
 
+            // --- Remote follow-mode state (used by the Android app / browser build) ---
+            app.manage(remote::RemoteState::new());
+
             // --- Load settings once (used by Timer, Audio, etc.) ---
             let initial_settings = {
                 let conn = db.lock().unwrap();
@@ -126,6 +155,8 @@ pub fn run() {
                     let custom = audio::find_custom_files(&audio_dir);
                     *audio.custom_paths.lock().unwrap() = custom;
                 }
+                #[cfg(mobile)]
+                audio.attach(app.handle().clone());
                 app.manage(audio);
             }
 
@@ -138,231 +169,54 @@ pub fn run() {
             );
             app.manage(timer);
 
-            // Create initial tray icon if tray_icon_enabled is on, or if an
-            // existing user has min_to_tray enabled (backwards compatibility).
-            //
-            // On Linux, TrayIconBuilder::build() can block the main thread
-            // indefinitely on KDE Plasma 6 / Wayland while waiting for the
-            // StatusNotifierWatcher D-Bus service to respond.  Spawning on a
-            // background thread lets setup() return so the event loop starts
-            // and the window can appear while the tray registers asynchronously.
-            if initial_settings.tray_icon_enabled || initial_settings.min_to_tray {
-                #[cfg(target_os = "linux")]
-                {
-                    let app_handle = app.handle().clone();
-                    let ts = Arc::clone(&tray_state);
-                    std::thread::spawn(move || {
-                        tray::create_tray(&app_handle, &ts);
-                    });
-                }
-                #[cfg(not(target_os = "linux"))]
-                tray::create_tray(app.handle(), &tray_state);
-            }
-
-            // --- Theme hot-reload watcher ---
-            // The watcher must stay alive for the duration of the app.
-            // Wrap in a Mutex so it satisfies Send + Sync for Tauri manage.
-            if let Some(watcher) = themes::watcher::spawn_watcher(
-                app_data_dir.clone(),
-                app.handle().clone(),
-            ) {
-                app.manage(std::sync::Mutex::new(watcher));
-            }
-
-            // --- Global shortcuts ---
-            shortcuts::register_all(app.handle(), &initial_settings);
-
-            // --- WebSocket server (opt-in) ---
+            // --- WebSocket server state (always managed; server only runs on desktop) ---
             let ws_state = websocket::WsState::new();
+            ws_state.attach(app.handle());
             app.manage(Arc::clone(&ws_state));
 
-            if initial_settings.websocket_enabled {
-                let port = initial_settings.websocket_port;
-                let app_clone = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    websocket::start(port, app_clone, &ws_state).await;
-                });
-            }
-
-            // --- Window event handlers ---
-            let main_window = app
-                .get_webview_window("main")
-                .expect("main window not found");
-
-            // The config sets decorations:true so macOS renders the window correctly
-            // (decorations:false prevents event processing on macOS). On every other
-            // platform, restore the decorations-free window immediately; the window is
-            // still hidden at this point so there is no visible flash.
-            #[cfg(not(target_os = "macos"))]
-            let _ = main_window.set_decorations(false);
-
-            // Enable macOS window tiling/arrangement.
-            //
-            // Two things are required for the full native experience:
-            //
-            // 1. NSWindowCollectionBehaviorManaged on the NSWindow — enables the
-            //    tiling popup on the green traffic-light button AND tells macOS
-            //    this window participates in Spaces / tiling.
-            //
-            // 2. NSApplication.setWindowsMenu: — registers the "Window" menu from
-            //    the menu bar as the official windows menu. macOS then dynamically
-            //    injects the standard window-management items (Fill, Center,
-            //    Move & Resize with Halves/Quarters/Arrange, Full Screen Tile,
-            //    Bring All to Front, etc.) when the menu is opened. Tauri may or
-            //    may not wire this up, so we do it explicitly here.
-            #[cfg(target_os = "macos")]
+            #[cfg(desktop)]
             {
-                use objc2::msg_send;
-                use objc2::runtime::{AnyClass, AnyObject};
-                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-                if let Ok(handle) = main_window.window_handle() {
-                    if let RawWindowHandle::AppKit(h) = handle.as_raw() {
-                        let ns_view = h.ns_view.as_ptr() as *mut AnyObject;
-                        // SAFETY: ns_view is a valid NSView* supplied by Tauri/WRY.
-                        let ns_window: *mut AnyObject =
-                            unsafe { msg_send![ns_view, window] };
-
-                        // NSWindowCollectionBehaviorManaged        = 1 << 2  (tiling)
-                        // NSWindowCollectionBehaviorFullScreenPrimary = 1 << 10 (full-screen)
-                        let behavior: u64 = (1 << 2) | (1 << 10);
-                        unsafe {
-                            let _: () = msg_send![ns_window, setCollectionBehavior: behavior];
-                        }
-
-                        // Walk the main menu bar looking for the "Window" menu and
-                        // register it with NSApplication. This causes macOS to
-                        // auto-populate it with all standard window-management items.
-                        unsafe {
-                            let ns_app_class = AnyClass::get(
-                                std::ffi::CStr::from_bytes_with_nul_unchecked(b"NSApplication\0"),
-                            );
-                            if let Some(cls) = ns_app_class {
-                                let ns_app: *mut AnyObject =
-                                    msg_send![cls, sharedApplication];
-                                let main_menu: *mut AnyObject =
-                                    msg_send![ns_app, mainMenu];
-                                if !main_menu.is_null() {
-                                    let count: isize =
-                                        msg_send![main_menu, numberOfItems];
-                                    for i in 0..count {
-                                        let item: *mut AnyObject =
-                                            msg_send![main_menu, itemAtIndex: i];
-                                        let submenu: *mut AnyObject =
-                                            msg_send![item, submenu];
-                                        if submenu.is_null() {
-                                            continue;
-                                        }
-                                        let title: *mut AnyObject =
-                                            msg_send![item, title];
-                                        let utf8: *const std::ffi::c_char =
-                                            msg_send![title, UTF8String];
-                                        if utf8.is_null() {
-                                            continue;
-                                        }
-                                        let s = std::ffi::CStr::from_ptr(utf8)
-                                            .to_str()
-                                            .unwrap_or("");
-                                        if s == "Window" {
-                                            let _: () = msg_send![
-                                                ns_app,
-                                                setWindowsMenu: submenu
-                                            ];
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                // Create initial tray icon if tray_icon_enabled is on, or if an
+                // existing user has min_to_tray enabled (backwards compatibility).
+                //
+                // On Linux, TrayIconBuilder::build() can block the main thread
+                // indefinitely on KDE Plasma 6 / Wayland while waiting for the
+                // StatusNotifierWatcher D-Bus service to respond.  Spawning on a
+                // background thread lets setup() return so the event loop starts
+                // and the window can appear while the tray registers asynchronously.
+                if initial_settings.tray_icon_enabled || initial_settings.min_to_tray {
+                    #[cfg(target_os = "linux")]
+                    {
+                        let app_handle = app.handle().clone();
+                        let ts = Arc::clone(&tray_state);
+                        std::thread::spawn(move || {
+                            tray::create_tray(&app_handle, &ts);
+                        });
                     }
+                    #[cfg(not(target_os = "linux"))]
+                    tray::create_tray(app.handle(), &tray_state);
                 }
-            }
 
-            // Apply always-on-top from saved settings on startup.
-            if initial_settings.always_on_top {
-                let _ = main_window.set_always_on_top(true);
-            }
-
-            // Restore saved window position/size if all four values are present and
-            // the saved rectangle still intersects at least one connected monitor.
-            if let (Some(wx), Some(wy), Some(ww), Some(wh)) = (
-                initial_settings.window_x,
-                initial_settings.window_y,
-                initial_settings.window_width,
-                initial_settings.window_height,
-            ) {
-                let on_screen = app
-                    .available_monitors()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .any(|m| {
-                        let mp = m.position();
-                        let ms = m.size();
-                        let mx0 = mp.x as i64;
-                        let my0 = mp.y as i64;
-                        let mx1 = mx0 + ms.width as i64;
-                        let my1 = my0 + ms.height as i64;
-                        let wx0 = wx as i64;
-                        let wy0 = wy as i64;
-                        let wx1 = wx0 + ww as i64;
-                        let wy1 = wy0 + wh as i64;
-                        wx0 < mx1 && wx1 > mx0 && wy0 < my1 && wy1 > my0
-                    });
-                if on_screen {
-                    let _ = main_window.set_position(tauri::PhysicalPosition::new(wx, wy));
-                    let _ = main_window.set_size(tauri::PhysicalSize::new(ww, wh));
+                // --- Theme hot-reload watcher ---
+                // The watcher must stay alive for the duration of the app.
+                // Wrap in a Mutex so it satisfies Send + Sync for Tauri manage.
+                if let Some(watcher) = themes::watcher::spawn_watcher(
+                    app_data_dir.clone(),
+                    app.handle().clone(),
+                ) {
+                    app.manage(std::sync::Mutex::new(watcher));
                 }
-            }
 
-            // Persist window position/size on move and resize, and close child windows
-            // when the main window is truly closed (not hidden to tray).
-            let db_for_close = db.clone();
-            let win_for_close = main_window.clone();
-            let app_for_close = app.handle().clone();
-            let db_for_pos = db.clone();
-            let win_for_pos = main_window.clone();
-            main_window.on_window_event(move |event| {
-                match event {
-                    tauri::WindowEvent::CloseRequested { api, .. } => {
-                        let hide = db_for_close
-                            .lock()
-                            .ok()
-                            .and_then(|conn| settings::load(&conn).ok())
-                            .map(|s| s.min_to_tray_on_close)
-                            .unwrap_or(false);
-                        if hide {
-                            api.prevent_close();
-                            let _ = win_for_close.hide();
-                        } else {
-                            // Main window is truly closing — close child windows if open.
-                            for label in ["settings", "stats"] {
-                                if let Some(win) = app_for_close.get_webview_window(label) {
-                                    let _ = win.close();
-                                }
-                            }
-                        }
-                    }
-                    tauri::WindowEvent::Moved(pos) => {
-                        if let Ok(conn) = db_for_pos.lock() {
-                            let _ = settings::save_setting(&conn, "window_x", &pos.x.to_string());
-                            let _ = settings::save_setting(&conn, "window_y", &pos.y.to_string());
-                        }
-                    }
-                    tauri::WindowEvent::Resized(size) => {
-                        if let Ok(conn) = db_for_pos.lock() {
-                            let _ = settings::save_setting(&conn, "window_width", &size.width.to_string());
-                            let _ = settings::save_setting(&conn, "window_height", &size.height.to_string());
-                            // Also capture position, since some window managers shift the
-                            // window origin when resizing.
-                            if let Ok(pos) = win_for_pos.outer_position() {
-                                let _ = settings::save_setting(&conn, "window_x", &pos.x.to_string());
-                                let _ = settings::save_setting(&conn, "window_y", &pos.y.to_string());
-                            }
-                        }
-                    }
-                    _ => {}
+                // --- Global shortcuts ---
+                shortcuts::register_all(app.handle(), &initial_settings);
+
+                // --- WebSocket server (opt-in; also enabled by LAN phone access) ---
+                if initial_settings.websocket_enabled || initial_settings.websocket_lan_enabled {
+                    commands::restart_websocket(app.handle(), &initial_settings, Arc::clone(&ws_state));
                 }
-            });
+
+                setup_desktop_window(app, &initial_settings, db.clone());
+            }
 
             Ok(())
         })
@@ -390,8 +244,16 @@ pub fn run() {
             shortcuts_reload,
             // Audio
             audio_set_custom,
+            audio_set_custom_bytes,
             audio_clear_custom,
             audio_get_custom_info,
+            audio_preview,
+            audio_presets,
+            // Background image
+            background_set_custom,
+            background_set_custom_bytes,
+            background_clear_custom,
+            background_get,
             // Notifications
             notification_show,
             // Diagnostics
@@ -403,7 +265,198 @@ pub fn run() {
             // Updater
             check_update,
             install_update,
+            // Pairing / remote
+            websocket_pairing_info,
+            websocket_regenerate_token,
+            remote_connect,
+            remote_disconnect,
+            remote_status,
+            remote_parse_pairing,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Desktop-only main window setup: decorations, always-on-top, position and
+/// size persistence, and close-to-tray handling.
+#[cfg(desktop)]
+fn setup_desktop_window(app: &mut tauri::App, initial_settings: &settings::Settings, db: db::DbState) {
+    let main_window = app
+        .get_webview_window("main")
+        .expect("main window not found");
+
+    // The config sets decorations:true so macOS renders the window correctly
+    // (decorations:false prevents event processing on macOS). On every other
+    // platform, restore the decorations-free window immediately; the window is
+    // still hidden at this point so there is no visible flash.
+    #[cfg(not(target_os = "macos"))]
+    let _ = main_window.set_decorations(false);
+
+    // Enable macOS window tiling/arrangement.
+    //
+    // Two things are required for the full native experience:
+    //
+    // 1. NSWindowCollectionBehaviorManaged on the NSWindow — enables the
+    //    tiling popup on the green traffic-light button AND tells macOS
+    //    this window participates in Spaces / tiling.
+    //
+    // 2. NSApplication.setWindowsMenu: — registers the "Window" menu from
+    //    the menu bar as the official windows menu. macOS then dynamically
+    //    injects the standard window-management items (Fill, Center,
+    //    Move & Resize with Halves/Quarters/Arrange, Full Screen Tile,
+    //    Bring All to Front, etc.) when the menu is opened. Tauri may or
+    //    may not wire this up, so we do it explicitly here.
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, AnyObject};
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        if let Ok(handle) = main_window.window_handle() {
+            if let RawWindowHandle::AppKit(h) = handle.as_raw() {
+                let ns_view = h.ns_view.as_ptr() as *mut AnyObject;
+                // SAFETY: ns_view is a valid NSView* supplied by Tauri/WRY.
+                let ns_window: *mut AnyObject =
+                    unsafe { msg_send![ns_view, window] };
+
+                // NSWindowCollectionBehaviorManaged        = 1 << 2  (tiling)
+                // NSWindowCollectionBehaviorFullScreenPrimary = 1 << 10 (full-screen)
+                let behavior: u64 = (1 << 2) | (1 << 10);
+                unsafe {
+                    let _: () = msg_send![ns_window, setCollectionBehavior: behavior];
+                }
+
+                // Walk the main menu bar looking for the "Window" menu and
+                // register it with NSApplication. This causes macOS to
+                // auto-populate it with all standard window-management items.
+                unsafe {
+                    let ns_app_class = AnyClass::get(
+                        std::ffi::CStr::from_bytes_with_nul_unchecked(b"NSApplication\0"),
+                    );
+                    if let Some(cls) = ns_app_class {
+                        let ns_app: *mut AnyObject =
+                            msg_send![cls, sharedApplication];
+                        let main_menu: *mut AnyObject =
+                            msg_send![ns_app, mainMenu];
+                        if !main_menu.is_null() {
+                            let count: isize =
+                                msg_send![main_menu, numberOfItems];
+                            for i in 0..count {
+                                let item: *mut AnyObject =
+                                    msg_send![main_menu, itemAtIndex: i];
+                                let submenu: *mut AnyObject =
+                                    msg_send![item, submenu];
+                                if submenu.is_null() {
+                                    continue;
+                                }
+                                let title: *mut AnyObject =
+                                    msg_send![item, title];
+                                let utf8: *const std::ffi::c_char =
+                                    msg_send![title, UTF8String];
+                                if utf8.is_null() {
+                                    continue;
+                                }
+                                let s = std::ffi::CStr::from_ptr(utf8)
+                                    .to_str()
+                                    .unwrap_or("");
+                                if s == "Window" {
+                                    let _: () = msg_send![
+                                        ns_app,
+                                        setWindowsMenu: submenu
+                                    ];
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Apply always-on-top from saved settings on startup.
+    if initial_settings.always_on_top {
+        let _ = main_window.set_always_on_top(true);
+    }
+
+    // Restore saved window position/size if all four values are present and
+    // the saved rectangle still intersects at least one connected monitor.
+    if let (Some(wx), Some(wy), Some(ww), Some(wh)) = (
+        initial_settings.window_x,
+        initial_settings.window_y,
+        initial_settings.window_width,
+        initial_settings.window_height,
+    ) {
+        let on_screen = app
+            .available_monitors()
+            .unwrap_or_default()
+            .into_iter()
+            .any(|m| {
+                let mp = m.position();
+                let ms = m.size();
+                let mx0 = mp.x as i64;
+                let my0 = mp.y as i64;
+                let mx1 = mx0 + ms.width as i64;
+                let my1 = my0 + ms.height as i64;
+                let wx0 = wx as i64;
+                let wy0 = wy as i64;
+                let wx1 = wx0 + ww as i64;
+                let wy1 = wy0 + wh as i64;
+                wx0 < mx1 && wx1 > mx0 && wy0 < my1 && wy1 > my0
+            });
+        if on_screen {
+            let _ = main_window.set_position(tauri::PhysicalPosition::new(wx, wy));
+            let _ = main_window.set_size(tauri::PhysicalSize::new(ww, wh));
+        }
+    }
+
+    // Persist window position/size on move and resize, and close child windows
+    // when the main window is truly closed (not hidden to tray).
+    let db_for_close = db.clone();
+    let win_for_close = main_window.clone();
+    let app_for_close = app.handle().clone();
+    let db_for_pos = db.clone();
+    let win_for_pos = main_window.clone();
+    main_window.on_window_event(move |event| {
+        match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                let hide = db_for_close
+                    .lock()
+                    .ok()
+                    .and_then(|conn| settings::load(&conn).ok())
+                    .map(|s| s.min_to_tray_on_close)
+                    .unwrap_or(false);
+                if hide {
+                    api.prevent_close();
+                    let _ = win_for_close.hide();
+                } else {
+                    // Main window is truly closing — close child windows if open.
+                    for label in ["settings", "stats"] {
+                        if let Some(win) = app_for_close.get_webview_window(label) {
+                            let _ = win.close();
+                        }
+                    }
+                }
+            }
+            tauri::WindowEvent::Moved(pos) => {
+                if let Ok(conn) = db_for_pos.lock() {
+                    let _ = settings::save_setting(&conn, "window_x", &pos.x.to_string());
+                    let _ = settings::save_setting(&conn, "window_y", &pos.y.to_string());
+                }
+            }
+            tauri::WindowEvent::Resized(size) => {
+                if let Ok(conn) = db_for_pos.lock() {
+                    let _ = settings::save_setting(&conn, "window_width", &size.width.to_string());
+                    let _ = settings::save_setting(&conn, "window_height", &size.height.to_string());
+                    // Also capture position, since some window managers shift the
+                    // window origin when resizing.
+                    if let Ok(pos) = win_for_pos.outer_position() {
+                        let _ = settings::save_setting(&conn, "window_x", &pos.x.to_string());
+                        let _ = settings::save_setting(&conn, "window_y", &pos.y.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    });
 }

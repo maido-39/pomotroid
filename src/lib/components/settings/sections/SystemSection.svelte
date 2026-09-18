@@ -1,11 +1,22 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { settings } from '$lib/stores/settings';
-  import { setSetting, resetSettings, clearSessionHistory, traySupported } from '$lib/ipc';
+  import {
+    setSetting,
+    resetSettings,
+    clearSessionHistory,
+    traySupported,
+    websocketPairingInfo,
+    websocketRegenerateToken,
+    onWebsocketClients,
+    onSettingsChanged,
+  } from '$lib/backend';
+  import type { PairingInfo } from '$lib/types';
+  import QRCode from 'qrcode';
   import SettingsToggle from '$lib/components/settings/SettingsToggle.svelte';
   import * as m from '$paraglide/messages.js';
   import { setLocale } from '$lib/locale.svelte.js';
-  import { isMac, isLinux } from '$lib/utils/platform';
+  import { isMac, isLinux, useInAppNav } from '$lib/utils/platform';
 
   // Language options: value stored in DB, label shown in native language.
   const LANGUAGES = [
@@ -32,6 +43,60 @@
   $effect(() => {
     localPort = String($settings.websocket_port);
   });
+
+  // --- Phone pairing (desktop only) ---
+  let pairing = $state<PairingInfo | null>(null);
+  let qrSvg = $state('');
+  let clients = $state(0);
+  let copied = $state(false);
+
+  async function refreshPairing() {
+    if (useInAppNav || !$settings.websocket_lan_enabled) {
+      pairing = null;
+      qrSvg = '';
+      return;
+    }
+    try {
+      pairing = await websocketPairingInfo();
+      clients = pairing.clients;
+      qrSvg = await QRCode.toString(pairing.url, {
+        type: 'svg',
+        margin: 1,
+        errorCorrectionLevel: 'M',
+        color: { dark: '#000000', light: '#ffffff' },
+      });
+    } catch {
+      pairing = null;
+      qrSvg = '';
+    }
+  }
+
+  onMount(() => {
+    const cleanups: (() => void)[] = [];
+    (async () => {
+      await refreshPairing();
+      cleanups.push(await onWebsocketClients((c) => (clients = c.connected)));
+      cleanups.push(await onSettingsChanged(refreshPairing));
+    })();
+    return () => cleanups.forEach((fn) => fn());
+  });
+
+  async function regenerateToken() {
+    const updated = await websocketRegenerateToken();
+    settings.set(updated);
+    await refreshPairing();
+  }
+
+  async function copyLink() {
+    if (!pairing) return;
+    try {
+      await navigator.clipboard.writeText(pairing.url);
+      copied = true;
+      setTimeout(() => (copied = false), 1500);
+    } catch {
+      // clipboard unavailable
+    }
+  }
 
   let langOpen = $state(false);
   let langEl: HTMLElement | undefined;
@@ -87,6 +152,40 @@
 </script>
 
 <div class="section">
+  {#if !useInAppNav}
+    <div class="group-heading">{m.system_group_phone()}</div>
+
+    <SettingsToggle
+      label={m.system_toggle_lan()}
+      description={m.system_toggle_lan_desc()}
+      checked={$settings.websocket_lan_enabled}
+      onclick={() => toggle('websocket_lan_enabled', $settings.websocket_lan_enabled)}
+    />
+
+    {#if $settings.websocket_lan_enabled}
+      <div class="pair-box">
+        {#if qrSvg}
+          <div class="qr">{@html qrSvg}</div>
+        {/if}
+        <div class="pair-meta">
+          {#if pairing}
+            <code class="pair-url">{pairing.url}</code>
+            {#if pairing.hosts.length > 1}
+              <span class="pair-hosts">{pairing.hosts.join(' · ')}</span>
+            {/if}
+          {/if}
+          <span class="pair-clients">{m.system_lan_clients({ n: clients })}</span>
+          <div class="pair-actions">
+            <button class="btn-sm" onclick={copyLink}>{copied ? m.system_copied() : m.system_btn_copy_link()}</button>
+            <button class="btn-sm btn-muted" onclick={regenerateToken}>{m.system_btn_regenerate_token()}</button>
+          </div>
+        </div>
+      </div>
+      <p class="note">{m.system_lan_note()}</p>
+    {/if}
+  {/if}
+
+  {#if !useInAppNav}
   <div class="group-heading">{m.system_group_integrations()}</div>
 
   <SettingsToggle
@@ -114,6 +213,7 @@
       <code>{'{ "type": "getState" }'}</code> to query the current timer state. Round changes are broadcast
       automatically.
     </p>
+  {/if}
   {/if}
 
   <div class="group-heading">{m.system_group_language()}</div>
@@ -167,6 +267,7 @@
     </div>
   </div>
 
+  {#if !useInAppNav}
   <div class="group-heading">{m.system_group_updates()}</div>
 
   <SettingsToggle
@@ -175,6 +276,7 @@
     checked={$settings.check_for_updates}
     onclick={() => toggle('check_for_updates', $settings.check_for_updates)}
   />
+  {/if}
 
   <div class="group-heading">{m.advanced_group_logging()}</div>
 
@@ -186,7 +288,7 @@
     onclick={() => toggle('verbose_logging', $settings.verbose_logging)}
   />
 
-  {#if trayAvailable}
+  {#if trayAvailable && !useInAppNav}
     <div class="group-heading">{m.system_group_tray()}</div>
 
     <!-- Show in System Tray: available on all platforms. -->
@@ -220,6 +322,7 @@
     {/if}
   {/if}
 
+  {#if !useInAppNav}
   <div class="group-heading">{m.system_group_window()}</div>
 
   <SettingsToggle
@@ -235,6 +338,7 @@
       checked={$settings.break_always_on_top}
       onclick={() => toggle('break_always_on_top', $settings.break_always_on_top)}
     />
+  {/if}
   {/if}
 
   <div class="group-heading">{m.system_group_data()}</div>
@@ -319,6 +423,82 @@
 
   .port-input:focus {
     border-color: var(--color-accent);
+  }
+
+  .pair-box {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    margin: 6px 20px 0;
+    padding: 12px;
+    border: 1px solid var(--color-separator);
+    border-radius: 6px;
+  }
+
+  .qr {
+    width: 132px;
+    height: 132px;
+    flex-shrink: 0;
+    background: #fff;
+    border-radius: 4px;
+    padding: 4px;
+  }
+
+  .qr :global(svg) {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .pair-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .pair-url {
+    font-family: monospace;
+    font-size: 0.72rem;
+    word-break: break-all;
+    background: color-mix(in oklch, var(--color-foreground) 12%, transparent);
+    padding: 4px 6px;
+    border-radius: 3px;
+    user-select: text;
+  }
+
+  .pair-hosts,
+  .pair-clients {
+    font-size: 0.72rem;
+    color: var(--color-foreground-darker, var(--color-foreground));
+    opacity: 0.75;
+  }
+
+  .pair-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 2px;
+  }
+
+  .btn-sm {
+    font-size: 0.72rem;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid color-mix(in oklch, var(--color-foreground) 20%, transparent);
+    background: var(--color-hover);
+    color: var(--color-foreground);
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+
+  .btn-sm:hover {
+    background: color-mix(in oklch, var(--color-foreground) 17%, transparent);
+  }
+
+  .btn-muted {
+    color: var(--color-foreground-darker, var(--color-foreground));
   }
 
   .note {

@@ -17,32 +17,49 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+# ---------------------------------------------------------------------------
+# Dependencies shared by desktop and mobile builds
+# ---------------------------------------------------------------------------
 [dependencies]
+# `tray-icon` is gated to desktop targets inside tauri itself, so it is safe here.
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-log = "2"
 log = "0.4"
 tauri-plugin-notification = "2"
-tauri-plugin-global-shortcut = "2"
 tauri-plugin-dialog = "2"
-tauri-plugin-updater = "2"
 
 rusqlite = { version = "0.40", features = ["bundled"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
 
 tokio = { version = "1", features = ["full"] }
-axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"
+# WebSocket client used by the "connect to desktop" (remote follow) mode.
+# No TLS: pairing is LAN-only over plain ws://.
+tokio-tungstenite = "0.29"
 
+# ---------------------------------------------------------------------------
+# Desktop-only dependencies (server, tray, rodio playback, global shortcuts,
+# updater, theme hot-reload watcher)
+# ---------------------------------------------------------------------------
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-updater = "2"
+axum = { version = "0.8", features = ["ws"] }
 rodio = { version = "0.22", default-features = false, features = ["playback", "wav", "mp3", "vorbis"] }
 symphonia-codec-adpcm = "0.6.0"
 tiny-skia = "0.12"
 notify = "8"
 
-[dev-dependencies]
-tokio-tungstenite = "0.29"
+# ---------------------------------------------------------------------------
+# Mobile-only dependencies (file access for content:// URIs, QR pairing)
+# ---------------------------------------------------------------------------
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-fs = "2"
+tauri-plugin-barcode-scanner = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

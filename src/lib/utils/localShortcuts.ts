@@ -2,8 +2,9 @@
 // Bindings are plain KeyboardEvent.key strings (e.g. " ", "ArrowLeft", "F11").
 // The handler is created via a factory so it can read reactive state by closure.
 
-import { timerToggle, timerRestartRound, timerSkip, setSetting } from '$lib/ipc';
+import { timerToggle, timerRestartRound, timerSkip, setSetting } from '$lib/backend';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { isDesktopWindow } from '$lib/utils/platform';
 import type { Settings } from '$lib/types';
 
 const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta', 'CapsLock']);
@@ -94,7 +95,7 @@ export function createLocalShortcutHandler(state: LocalShortcutState): (e: Keybo
       e.preventDefault();
       const next = !state.getFullscreen();
       state.setFullscreen(next);
-      getCurrentWebviewWindow().setFullscreen(next);
+      if (isDesktopWindow) getCurrentWebviewWindow().setFullscreen(next);
     }
   };
 }

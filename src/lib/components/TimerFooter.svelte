@@ -1,10 +1,11 @@
 <script lang="ts">
   // Round counter, reset/skip buttons, and volume slider.
   import type { TimerState } from '$lib/types';
-  import { timerReset, setSetting } from '$lib/ipc';
+  import { timerReset, setSetting } from '$lib/backend';
   import { settings } from '$lib/stores/settings';
   import * as m from '$paraglide/messages.js';
   import Tooltip from './Tooltip.svelte';
+  import { isTouch } from '$lib/utils/platform';
 
   interface Props {
     snap: TimerState;
@@ -31,6 +32,11 @@
   }
 
   function toggleMute() {
+    // On touch devices a tap opens the slider instead of muting (no hover).
+    if (isTouch) {
+      showVolume = !showVolume;
+      return;
+    }
     if (localVolume === 0) {
       const restore = premuteVolume ?? 1.0;
       premuteVolume = null;

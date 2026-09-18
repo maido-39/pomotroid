@@ -1,3 +1,4 @@
+#[cfg(desktop)]
 pub mod watcher;
 
 use serde::{Deserialize, Serialize};

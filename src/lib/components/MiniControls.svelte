@@ -1,6 +1,6 @@
 <script lang="ts">
   import { fade } from 'svelte/transition';
-  import { timerToggle, timerRestartRound, timerSkip } from '$lib/ipc';
+  import { timerToggle, timerRestartRound, timerSkip } from '$lib/backend';
   import { timerState } from '$lib/stores/timer';
 
   let state = $derived($timerState);

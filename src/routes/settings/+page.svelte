@@ -1,38 +1,44 @@
 <script lang="ts">
   import '../../app.css';
   import { onMount } from 'svelte';
-  import { getSettings, getThemes, onSettingsChanged, onThemesChanged } from '$lib/ipc';
+  import { getSettings, getThemes, onSettingsChanged, onThemesChanged } from '$lib/backend';
+  import { isDesktopWindow, useInAppNav } from '$lib/utils/platform';
   import { settings } from '$lib/stores/settings';
   import { applyTheme } from '$lib/stores/theme';
   import { resolveThemeName } from '$lib/utils/theme';
   import { setLocale } from '$lib/locale.svelte.js';
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
   import type { UnlistenFn } from '@tauri-apps/api/event';
-  import { info, error as logError } from '@tauri-apps/plugin-log';
+  import { info, error as logError } from '$lib/utils/log';
   import { createLocalShortcutHandler } from '$lib/utils/localShortcuts';
 
   import SettingsTitlebar from '$lib/components/settings/SettingsTitlebar.svelte';
+  import Backdrop from '$lib/components/Backdrop.svelte';
   import TimerSection from '$lib/components/settings/sections/TimerSection.svelte';
   import AppearanceSection from '$lib/components/settings/sections/AppearanceSection.svelte';
   import NotificationsSection from '$lib/components/settings/sections/NotificationsSection.svelte';
   import ShortcutsSection from '$lib/components/settings/sections/ShortcutsSection.svelte';
   import SystemSection from '$lib/components/settings/sections/SystemSection.svelte';
   import AboutSection from '$lib/components/settings/sections/AboutSection.svelte';
+  import ConnectSection from '$lib/components/settings/sections/ConnectSection.svelte';
 
   import * as m from '$paraglide/messages.js';
 
-  type Section = 'timer' | 'appearance' | 'notifications' | 'shortcuts' | 'system' | 'about';
+  type Section = 'connect' | 'timer' | 'appearance' | 'notifications' | 'shortcuts' | 'system' | 'about';
 
+  // Mobile and the browser build get a "Desktop" (pairing) section first and
+  // no global-shortcut section (there is no OS-level hotkey support there).
   const SECTIONS: { id: Section; label: () => string }[] = [
+    ...(useInAppNav ? [{ id: 'connect' as Section, label: m.nav_connect }] : []),
     { id: 'timer', label: m.nav_timer },
     { id: 'appearance', label: m.nav_appearance },
     { id: 'notifications', label: m.nav_notifications },
-    { id: 'shortcuts', label: m.nav_shortcuts },
+    ...(useInAppNav ? [] : [{ id: 'shortcuts' as Section, label: m.nav_shortcuts }]),
     { id: 'system', label: m.nav_system },
     { id: 'about', label: m.nav_about },
   ];
 
-  let active = $state<Section>('timer');
+  let active = $state<Section>(useInAppNav ? 'connect' : 'timer');
 
   // Local shortcut state for the settings window.
   let localVolume = $state(1.0);
@@ -78,7 +84,7 @@
         await info(`[settings] initialized, theme=${activeTheme?.name ?? 'none'}`);
 
         // Show the window now that the theme is applied (avoids white flash)
-        await getCurrentWebviewWindow().show();
+        if (isDesktopWindow) await getCurrentWebviewWindow().show();
       } catch (e) {
         await logError(`[settings] initialization failed: ${e}`);
         throw e;
@@ -132,7 +138,8 @@
   });
 </script>
 
-<div class="window">
+<div class="window" class:has-backdrop={$settings.bg_image_enabled && $settings.bg_image_name !== ''}>
+  <Backdrop />
   <SettingsTitlebar />
 
   <div class="body">
@@ -155,7 +162,9 @@
 
     <!-- Right content area -->
     <main class="content">
-      {#if active === 'timer'}
+      {#if active === 'connect'}
+        <ConnectSection />
+      {:else if active === 'timer'}
         <TimerSection />
       {:else if active === 'appearance'}
         <AppearanceSection />
@@ -174,6 +183,7 @@
 
 <style>
   .window {
+    position: relative;
     width: 100%;
     height: 100%;
     display: flex;
@@ -181,6 +191,16 @@
     overflow: hidden;
     background: var(--color-background);
     animation: app-fade-in 0.2s ease both;
+  }
+
+  .window > :global(:not(.backdrop)) {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Let the backdrop show through the sidebar when an image is active. */
+  .window.has-backdrop .sidebar {
+    background: color-mix(in oklch, var(--color-background-light) 78%, transparent);
   }
 
   .body {
@@ -235,5 +255,39 @@
     flex: 1;
     overflow-y: auto;
     min-width: 0;
+  }
+
+  /* Narrow screens (phone): sidebar becomes a horizontal tab strip. */
+  @media (max-width: 600px) {
+    .body {
+      flex-direction: column;
+    }
+
+    .sidebar {
+      width: 100%;
+      border-right: none;
+      border-bottom: 1px solid var(--color-separator);
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 0;
+      flex-shrink: 0;
+    }
+
+    .sidebar nav {
+      display: flex;
+    }
+
+    .nav-item {
+      width: auto;
+      white-space: nowrap;
+      border-left: none;
+      border-bottom: 3px solid transparent;
+      padding: 10px 14px;
+    }
+
+    .nav-item.active {
+      border-left-color: transparent;
+      border-bottom-color: var(--color-accent);
+    }
   }
 </style>

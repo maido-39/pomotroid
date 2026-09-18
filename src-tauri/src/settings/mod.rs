@@ -45,6 +45,27 @@ pub struct Settings {
     pub shortcut_restart: String,
     pub websocket_enabled: bool,
     pub websocket_port: u16,
+    /// When true the WebSocket server binds to all interfaces (LAN) so a
+    /// paired phone can connect; otherwise it is loopback-only.
+    pub websocket_lan_enabled: bool,
+    /// Pairing token required for control/settings access over the WebSocket
+    /// server. Empty until LAN access is first enabled.
+    pub websocket_token: String,
+    /// Preset id (or "default") per alert cue. Custom files take precedence.
+    pub sound_work_alert: String,
+    pub sound_short_break_alert: String,
+    pub sound_long_break_alert: String,
+    pub sound_tick: String,
+    /// Custom background image (stored in `{app_data_dir}/background/`).
+    pub bg_image_enabled: bool,
+    /// Backdrop opacity, 0–100.
+    pub bg_image_opacity: u32,
+    /// Gaussian blur radius in CSS px, 0–40.
+    pub bg_image_blur: u32,
+    /// Brightness in percent, 20–150.
+    pub bg_image_brightness: u32,
+    /// Original file name of the chosen image ("" = none).
+    pub bg_image_name: String,
     pub language: String,
     pub verbose_logging: bool,
     pub check_for_updates: bool,
@@ -109,6 +130,17 @@ impl Default for Settings {
             shortcut_restart: "Control+F4".to_string(),
             websocket_enabled: false,
             websocket_port: 1314,
+            websocket_lan_enabled: false,
+            websocket_token: String::new(),
+            sound_work_alert: "default".to_string(),
+            sound_short_break_alert: "default".to_string(),
+            sound_long_break_alert: "default".to_string(),
+            sound_tick: "default".to_string(),
+            bg_image_enabled: false,
+            bg_image_opacity: 60,
+            bg_image_blur: 8,
+            bg_image_brightness: 70,
+            bg_image_name: String::new(),
             language: "auto".to_string(),
             verbose_logging: false,
             check_for_updates: true,
@@ -234,6 +266,17 @@ pub fn load(conn: &Connection) -> Result<Settings> {
             .unwrap_or(d.shortcut_restart),
         websocket_enabled: parse_bool(&map, "websocket_enabled", d.websocket_enabled),
         websocket_port: parse_u32(&map, "websocket_port", d.websocket_port as u32) as u16,
+        websocket_lan_enabled: parse_bool(&map, "websocket_lan_enabled", d.websocket_lan_enabled),
+        websocket_token: map.get("websocket_token").cloned().unwrap_or(d.websocket_token),
+        sound_work_alert: map.get("sound_work_alert").cloned().unwrap_or(d.sound_work_alert),
+        sound_short_break_alert: map.get("sound_short_break_alert").cloned().unwrap_or(d.sound_short_break_alert),
+        sound_long_break_alert: map.get("sound_long_break_alert").cloned().unwrap_or(d.sound_long_break_alert),
+        sound_tick: map.get("sound_tick").cloned().unwrap_or(d.sound_tick),
+        bg_image_enabled: parse_bool(&map, "bg_image_enabled", d.bg_image_enabled),
+        bg_image_opacity: parse_u32(&map, "bg_image_opacity", d.bg_image_opacity).min(100),
+        bg_image_blur: parse_u32(&map, "bg_image_blur", d.bg_image_blur).min(40),
+        bg_image_brightness: parse_u32(&map, "bg_image_brightness", d.bg_image_brightness).clamp(20, 150),
+        bg_image_name: map.get("bg_image_name").cloned().unwrap_or(d.bg_image_name),
         language: map.get("language").cloned().unwrap_or(d.language),
         verbose_logging: parse_bool(&map, "verbose_logging", d.verbose_logging),
         check_for_updates: parse_bool(&map, "check_for_updates", d.check_for_updates),
@@ -449,6 +492,37 @@ mod tests {
             [], |r| r.get(0),
         ).unwrap();
         assert_eq!(old_count, 0, "old *_mins keys must be absent after MIGRATION_2");
+    }
+
+    #[test]
+    fn new_keys_round_trip_and_clamp() {
+        let conn = setup();
+        seed_defaults(&conn).unwrap();
+        let s = load(&conn).unwrap();
+        assert_eq!(s.sound_work_alert, "default");
+        assert_eq!(s.sound_tick, "default");
+        assert!(!s.bg_image_enabled);
+        assert_eq!((s.bg_image_opacity, s.bg_image_blur, s.bg_image_brightness), (60, 8, 70));
+        assert!(!s.websocket_lan_enabled);
+        assert!(s.websocket_token.is_empty());
+
+        save_setting(&conn, "sound_work_alert", "chime").unwrap();
+        save_setting(&conn, "bg_image_enabled", "true").unwrap();
+        save_setting(&conn, "bg_image_opacity", "250").unwrap();
+        save_setting(&conn, "bg_image_blur", "99").unwrap();
+        save_setting(&conn, "bg_image_brightness", "5").unwrap();
+        save_setting(&conn, "bg_image_name", "sunset.jpg").unwrap();
+        save_setting(&conn, "websocket_lan_enabled", "true").unwrap();
+        save_setting(&conn, "websocket_token", "abc123").unwrap();
+        let s = load(&conn).unwrap();
+        assert_eq!(s.sound_work_alert, "chime");
+        assert!(s.bg_image_enabled);
+        assert_eq!(s.bg_image_opacity, 100, "opacity clamps to 100");
+        assert_eq!(s.bg_image_blur, 40, "blur clamps to 40");
+        assert_eq!(s.bg_image_brightness, 20, "brightness clamps to 20");
+        assert_eq!(s.bg_image_name, "sunset.jpg");
+        assert!(s.websocket_lan_enabled);
+        assert_eq!(s.websocket_token, "abc123");
     }
 
     #[test]

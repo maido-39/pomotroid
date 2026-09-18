@@ -1,5 +1,5 @@
 use rusqlite::{params, Connection, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Session CRUD (DATA-03)
@@ -41,7 +41,7 @@ pub fn complete_session(
 // Stats queries
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStats {
     pub total_work_sessions: i64,
     pub completed_work_sessions: i64,
@@ -80,7 +80,7 @@ pub fn get_all_time_stats(conn: &Connection) -> Result<SessionStats> {
 // Detailed stats queries (DATA-04)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DailyStats {
     pub rounds: u32,
     pub focus_mins: u32,
@@ -90,21 +90,21 @@ pub struct DailyStats {
     pub by_hour: Vec<u32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DayStat {
     /// Local calendar date in "YYYY-MM-DD" format.
     pub date: String,
     pub rounds: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeatmapEntry {
     /// Local calendar date in "YYYY-MM-DD" format.
     pub date: String,
     pub count: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreakInfo {
     pub current: u32,
     pub longest: u32,

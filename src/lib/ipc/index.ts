@@ -9,6 +9,12 @@ import type {
   Settings,
   Theme,
   CustomAudioInfo,
+  AudioCueKey,
+  BackgroundInfo,
+  RemoteStatus,
+  PairingTarget,
+  PairingInfo,
+  WsClients,
   DetailedStats,
   HeatmapStats,
   UpdateInfo,
@@ -53,14 +59,47 @@ export const getCustomAudioInfo = () => invoke<CustomAudioInfo>('audio_get_custo
 export const setCustomAudio = (cue: string, srcPath: string) =>
   invoke<string>('audio_set_custom', { cue, srcPath });
 
-/** Delete the custom file for `cue` and revert to the built-in sound. */
+/** Upload the file contents directly (base64); used on Android where the picker returns content:// URIs. */
+export const setCustomAudioBytes = (cue: AudioCueKey, name: string, dataB64: string) =>
+  invoke<string>('audio_set_custom_bytes', { cue, name, dataB64 });
+
+/** Delete the custom file for `cue` and revert to the preset/built-in sound. */
 export const clearCustomAudio = (cue: string) => invoke<void>('audio_clear_custom', { cue });
+
+/** Play the currently active sound for `cue` once (audition in Settings). */
+export const audioPreview = (cue: AudioCueKey) => invoke<void>('audio_preview', { cue });
+
+/** Ids of the bundled preset sounds, in display order. */
+export const audioPresets = () => invoke<string[]>('audio_presets');
 
 /** Open a native file picker filtered to audio formats. Returns a path or null. */
 export const openAudioFilePicker = (): Promise<string | null> =>
   dialogOpen({
     multiple: false,
-    filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'ogg'] }],
+    filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'ogg', 'flac'] }],
+  }) as Promise<string | null>;
+
+// --- Background image commands ---
+
+/** Current custom background image as a data URL, or null when none is set. */
+export const getBackground = () => invoke<BackgroundInfo | null>('background_get');
+
+/** Copy `srcPath` into the app data dir as the background image; returns the display name. */
+export const setCustomBackground = (srcPath: string) =>
+  invoke<string>('background_set_custom', { srcPath });
+
+/** Upload the image contents directly (base64); used on Android. */
+export const setCustomBackgroundBytes = (name: string, dataB64: string) =>
+  invoke<string>('background_set_custom_bytes', { name, dataB64 });
+
+/** Delete the custom background image. */
+export const clearCustomBackground = () => invoke<void>('background_clear_custom');
+
+/** Open a native file picker filtered to image formats. Returns a path or null. */
+export const openImageFilePicker = (): Promise<string | null> =>
+  dialogOpen({
+    multiple: false,
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }],
   }) as Promise<string | null>;
 
 // --- Diagnostic log commands ---
@@ -103,6 +142,27 @@ export const checkUpdate = () => invoke<UpdateInfo | null>('check_update');
 /** Download, install, and immediately relaunch with the pending update. */
 export const installUpdate = () => invoke<void>('install_update');
 
+// --- Pairing / remote commands ---
+
+/** LAN address, port and pairing token of this desktop (QR code content). */
+export const websocketPairingInfo = () => invoke<PairingInfo>('websocket_pairing_info');
+
+/** Mint a new pairing token; paired phones must re-pair. */
+export const websocketRegenerateToken = () => invoke<Settings>('websocket_regenerate_token');
+
+/** Connect this device to a desktop (remote follow mode). */
+export const remoteConnect = (host: string, port: number, token: string) =>
+  invoke<void>('remote_connect', { host, port, token });
+
+/** Leave remote mode and return to the local timer. */
+export const remoteDisconnect = () => invoke<void>('remote_disconnect');
+
+export const remoteStatus = () => invoke<RemoteStatus>('remote_status');
+
+/** Parse a scanned QR code / pasted URL into host, port and token. */
+export const remoteParsePairing = (text: string) =>
+  invoke<PairingTarget>('remote_parse_pairing', { text });
+
 // --- Event listeners ---
 
 export const onTimerTick = (
@@ -132,3 +192,23 @@ export const onThemesChanged = (cb: (themes: Theme[]) => void): Promise<Unlisten
 
 export const onSessionsCleared = (cb: () => void): Promise<UnlistenFn> =>
   listen<void>('sessions:cleared', () => cb());
+
+/** Fired after a custom sound is set or cleared; payload is the cue key. */
+export const onAudioChanged = (cb: (cue: string) => void): Promise<UnlistenFn> =>
+  listen<string>('audio:changed', (e) => cb(e.payload));
+
+/** Fired after the background image is set or cleared. */
+export const onBackgroundChanged = (cb: () => void): Promise<UnlistenFn> =>
+  listen<void>('background:changed', () => cb());
+
+/** Fired when a session is recorded (stats views refresh on it). */
+export const onSessionsChanged = (cb: () => void): Promise<UnlistenFn> =>
+  listen<void>('sessions:changed', () => cb());
+
+/** Remote follow-mode status changes (connecting/connected/…). */
+export const onRemoteStatus = (cb: (status: RemoteStatus) => void): Promise<UnlistenFn> =>
+  listen<RemoteStatus>('remote:status', (e) => cb(e.payload));
+
+/** Number of WebSocket clients connected to this desktop. */
+export const onWebsocketClients = (cb: (c: WsClients) => void): Promise<UnlistenFn> =>
+  listen<WsClients>('websocket:clients', (e) => cb(e.payload));

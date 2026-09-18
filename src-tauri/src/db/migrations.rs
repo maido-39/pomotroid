@@ -90,6 +90,24 @@ const MIGRATION_6: &str = "
     INSERT INTO schema_version VALUES (6);
 ";
 
+/// Seeds the settings added for sound presets, the custom background image
+/// and LAN access to the WebSocket server. `INSERT OR IGNORE` keeps any value
+/// a user already has.
+const MIGRATION_7: &str = "
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('sound_work_alert', 'default');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('sound_short_break_alert', 'default');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('sound_long_break_alert', 'default');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('sound_tick', 'default');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('bg_image_enabled', 'false');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('bg_image_opacity', '60');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('bg_image_blur', '8');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('bg_image_brightness', '70');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('bg_image_name', '');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('websocket_lan_enabled', 'false');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('websocket_token', '');
+    INSERT INTO schema_version VALUES (7);
+";
+
 /// Apply any pending migrations. Each migration is wrapped in a transaction
 /// so a partial failure leaves the database unchanged.
 pub fn run(conn: &Connection) -> Result<()> {
@@ -131,6 +149,12 @@ pub fn run(conn: &Connection) -> Result<()> {
         log::info!("[db/migrations] MIGRATION_6 complete");
     }
 
+    if version < 7 {
+        log::info!("[db/migrations] applying MIGRATION_7: seed sound presets, background image and LAN settings");
+        conn.execute_batch(&format!("BEGIN; {MIGRATION_7} COMMIT;"))?;
+        log::info!("[db/migrations] MIGRATION_7 complete");
+    }
+
     Ok(())
 }
 
@@ -166,7 +190,7 @@ mod tests {
         let v: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 6);
+        assert_eq!(v, 7);
     }
 
     #[test]

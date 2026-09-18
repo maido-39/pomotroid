@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { settings } from '$lib/stores/settings';
-  import { setSetting, reloadShortcuts, accessibilityTrusted } from '$lib/ipc';
+  import { setSetting, reloadShortcuts, accessibilityTrusted } from '$lib/backend';
   import ShortcutInput from '$lib/components/ShortcutInput.svelte';
   import LocalShortcutInput from '$lib/components/LocalShortcutInput.svelte';
   import SettingsToggle from '$lib/components/settings/SettingsToggle.svelte';

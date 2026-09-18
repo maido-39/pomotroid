@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Backdrop from '$lib/components/Backdrop.svelte';
   import '../../app.css';
   import { onMount } from 'svelte';
   import {
@@ -10,17 +11,19 @@
     onSessionsCleared,
     statsGetDetailed,
     statsGetHeatmap,
-  } from '$lib/ipc';
+    onSessionsChanged,
+  } from '$lib/backend';
+  import { goto } from '$app/navigation';
   import { settings } from '$lib/stores/settings';
   import { applyTheme } from '$lib/stores/theme';
   import { setLocale } from '$lib/locale.svelte.js';
   import { resolveThemeName } from '$lib/utils/theme';
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-  import { isMac } from '$lib/utils/platform';
+  import { isMac, isDesktopWindow, useInAppNav } from '$lib/utils/platform';
   import type { UnlistenFn } from '@tauri-apps/api/event';
   import type { DetailedStats, HeatmapStats } from '$lib/types';
   import * as m from '$paraglide/messages.js';
-  import { info, error as logError } from '@tauri-apps/plugin-log';
+  import { info, error as logError } from '$lib/utils/log';
 
   import DailyView from '$lib/components/stats/DailyView.svelte';
   import WeeklyView from '$lib/components/stats/WeeklyView.svelte';
@@ -46,6 +49,10 @@
   }
 
   function close() {
+    if (useInAppNav) {
+      goto('/');
+      return;
+    }
     getCurrentWebviewWindow().close();
   }
 
@@ -65,7 +72,7 @@
         if (activeTheme) applyTheme(activeTheme);
 
         // Show window immediately after theme is applied
-        await getCurrentWebviewWindow().show();
+        if (isDesktopWindow) await getCurrentWebviewWindow().show();
 
         detailed = await statsGetDetailed();
         await info(`[stats] initialized, theme=${activeTheme?.name ?? 'none'}`);
@@ -89,6 +96,14 @@
             if (heatmapLoaded) heatmap = await statsGetHeatmap();
           } catch (e) {
             await logError(`[stats] failed to refresh stats after session clear: ${e}`);
+          }
+        }),
+        await onSessionsChanged(async () => {
+          try {
+            detailed = await statsGetDetailed();
+            if (heatmapLoaded) heatmap = await statsGetHeatmap();
+          } catch (e) {
+            await logError(`[stats] failed to refresh stats after session change: ${e}`);
           }
         }),
         await onSettingsChanged(async (updated) => {
@@ -129,10 +144,11 @@
 </script>
 
 <div class="window">
+  <Backdrop />
   <!-- Titlebar -->
   <nav class="titlebar" class:macos={isMac} data-tauri-drag-region>
     <span class="titlebar-label">{m.stats_title()}</span>
-    {#if !isMac}
+    {#if !isMac || useInAppNav}
       <button class="btn-close" onclick={close} aria-label="Close">
         <svg width="12" height="12" viewBox="0 0 12 12">
           <line
@@ -184,7 +200,13 @@
 </div>
 
 <style>
+  .window > :global(:not(.backdrop)) {
+    position: relative;
+    z-index: 1;
+  }
+
   .window {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100vh;

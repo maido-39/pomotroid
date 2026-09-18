@@ -1,9 +1,14 @@
 <script lang="ts">
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-  import { isMac } from '$lib/utils/platform';
+  import { isMac, useInAppNav } from '$lib/utils/platform';
+  import { goto } from '$app/navigation';
   import * as m from '$paraglide/messages.js';
 
   function close() {
+    if (useInAppNav) {
+      goto('/');
+      return;
+    }
     getCurrentWebviewWindow().close();
   }
 </script>
@@ -11,7 +16,7 @@
 <nav class="titlebar" class:macos={isMac} data-tauri-drag-region>
   <h1 class="title">{m.settings_title()}</h1>
   <!-- Hidden on macOS; the native traffic light close button handles this. -->
-  {#if !isMac}
+  {#if !isMac || useInAppNav}
     <button class="btn-close" onclick={close} aria-label="Close">
       <svg width="12" height="12" viewBox="0 0 12 12">
         <line

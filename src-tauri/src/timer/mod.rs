@@ -4,7 +4,7 @@ pub mod sequence;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::audio::{AudioCue, AudioManager};
@@ -22,7 +22,7 @@ use sequence::{RoundType, SequenceState};
 
 /// Full timer state snapshot. Sent as the payload of Tauri events and
 /// returned by the `timer_get_state` IPC command.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimerSnapshot {
     /// "work" | "short-break" | "long-break"
     pub round_type: String,
@@ -132,6 +132,14 @@ impl TimerController {
         } else {
             log::info!("[timer] start");
             self.engine.send(TimerCommand::Start);
+        }
+    }
+
+    /// Pause if running (no-op otherwise). Used when entering remote mode.
+    pub fn pause(&self) {
+        if self.shared.lock().unwrap().is_running {
+            log::info!("[timer] pause (remote mode)");
+            self.engine.send(TimerCommand::Pause);
         }
     }
 
@@ -252,6 +260,7 @@ fn listen_events(
                     websocket::broadcast_started(&ws, total_secs);
                 }
                 tray::update_menu_items(&tray, true, false);
+                crate::mobile::timer_service::update(&app, &build_snapshot(&sequence, &settings, &shared));
             }
 
             TimerEvent::Tick { elapsed_secs, total_secs } => {
@@ -264,6 +273,10 @@ fn listen_events(
                     "timer:tick",
                     serde_json::json!({ "elapsed_secs": elapsed_secs, "total_secs": total_secs }),
                 );
+                if let Some(ws) = app.try_state::<Arc<WsState>>() {
+                    websocket::broadcast_tick(&ws, elapsed_secs, total_secs);
+                }
+                crate::mobile::timer_service::update(&app, &build_snapshot(&sequence, &settings, &shared));
 
                 // --- Session recording: start on first tick of a new round ---
                 if elapsed_secs == 1 && current_session_id.is_none() {
@@ -312,6 +325,8 @@ fn listen_events(
                     if let Ok(conn) = db.lock() {
                         let _ = queries::complete_session(&conn, session_id, !was_skipped);
                     }
+                    // Stats views (local and on paired phones) refresh on this.
+                    let _ = app.emit("sessions:changed", ());
                 }
 
                 // Advance sequence.
@@ -382,6 +397,9 @@ fn listen_events(
                     websocket::broadcast_round_change(&ws, snap);
                 }
 
+                // Native notification + foreground service on mobile.
+                crate::mobile::timer_service::round_changed(&app, &build_snapshot(&sequence, &settings, &shared));
+
                 // Auto-start if configured.
                 let should_auto = match next_round {
                     RoundType::Work => auto_start_work,
@@ -416,6 +434,7 @@ fn listen_events(
                 let progress = if total > 0 { elapsed_secs as f32 / total as f32 } else { 0.0 };
                 tray::update_icon(&tray, &rt, true, progress);
                 tray::update_menu_items(&tray, false, true);
+                crate::mobile::timer_service::update(&app, &build_snapshot(&sequence, &settings, &shared));
             }
 
             TimerEvent::Resumed { elapsed_secs } => {
@@ -437,6 +456,7 @@ fn listen_events(
                 tray::update_icon(&tray, &rt, false, progress);
                 last_tray_progress = progress;
                 tray::update_menu_items(&tray, true, false);
+                crate::mobile::timer_service::update(&app, &build_snapshot(&sequence, &settings, &shared));
             }
 
             TimerEvent::Reset => {
@@ -450,10 +470,11 @@ fn listen_events(
                     s.is_running = false;
                 }
                 let snapshot = build_snapshot(&sequence, &settings, &shared);
-                let _ = app.emit("timer:reset", snapshot);
+                let _ = app.emit("timer:reset", snapshot.clone());
                 if let Some(ws) = app.try_state::<Arc<WsState>>() {
-                    websocket::broadcast_reset(&ws);
+                    websocket::broadcast_reset(&ws, snapshot.clone());
                 }
+                crate::mobile::timer_service::update(&app, &snapshot);
 
                 // Prime the engine with the current round's duration so the
                 // next Start uses the correct (possibly settings-updated)

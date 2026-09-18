@@ -63,6 +63,9 @@ body {
   height: 100%;
   width: 100%;
   overflow: hidden;
+  /* Keep content clear of notches / gesture bars on phones. */
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   font-family: 'Mona Sans', system-ui, sans-serif;
   background-color: var(--color-background);
   color: var(--color-foreground);

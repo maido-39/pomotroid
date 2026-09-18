@@ -3,10 +3,96 @@
   import type { Theme } from '$lib/types';
   import { settings } from '$lib/stores/settings';
   import { applyTheme } from '$lib/stores/theme';
-  import { getThemes, setSetting, onThemesChanged } from '$lib/ipc';
+  import {
+    getThemes,
+    setSetting,
+    onThemesChanged,
+    getBackground,
+    setCustomBackground,
+    setCustomBackgroundBytes,
+    clearCustomBackground,
+    openImageFilePicker,
+    onBackgroundChanged,
+  } from '$lib/backend';
   import { resolveThemeName } from '$lib/utils/theme';
   import type { UnlistenFn } from '@tauri-apps/api/event';
   import * as m from '$paraglide/messages.js';
+  import SettingsToggle from '$lib/components/settings/SettingsToggle.svelte';
+  import SettingsSlider from '$lib/components/settings/SettingsSlider.svelte';
+  import { isMobile } from '$lib/utils/platform';
+  import { readPickedFileAsBase64 } from '$lib/utils/files';
+  import { error as logError, warn } from '$lib/utils/log';
+
+  // --- Background image ---
+  let bgName = $state<string | null>(null);
+  let bgError = $state<string | null>(null);
+  // Local mirrors so the sliders move instantly while the save round-trips.
+  let bgOpacity = $state($settings.bg_image_opacity);
+  let bgBlur = $state($settings.bg_image_blur);
+  let bgBrightness = $state($settings.bg_image_brightness);
+  $effect(() => {
+    bgOpacity = $settings.bg_image_opacity;
+    bgBlur = $settings.bg_image_blur;
+    bgBrightness = $settings.bg_image_brightness;
+  });
+
+  async function refreshBackground() {
+    try {
+      const info = await getBackground();
+      bgName = info?.name ?? null;
+    } catch (err) {
+      await warn(`[background] getBackground failed: ${err}`);
+    }
+  }
+
+  async function pickBackground() {
+    bgError = null;
+    let path: string | null = null;
+    try {
+      path = await openImageFilePicker();
+    } catch (err) {
+      await logError(`[background] file picker error: ${err}`);
+      return;
+    }
+    if (!path) return;
+    try {
+      if (isMobile) {
+        const { name, dataB64 } = await readPickedFileAsBase64(path);
+        bgName = await setCustomBackgroundBytes(name, dataB64);
+      } else {
+        bgName = await setCustomBackground(path);
+      }
+    } catch (err) {
+      await logError(`[background] set failed: ${err}`);
+      bgError = String(err);
+    }
+  }
+
+  async function removeBackground() {
+    bgError = null;
+    try {
+      await clearCustomBackground();
+      bgName = null;
+    } catch (err) {
+      await logError(`[background] clear failed: ${err}`);
+      bgError = String(err);
+    }
+  }
+
+  async function toggleBackground() {
+    const updated = await setSetting('bg_image_enabled', $settings.bg_image_enabled ? 'false' : 'true');
+    settings.set(updated);
+  }
+
+  // Sliders: update the local mirror immediately, persist on every input event
+  // (the Rust side clamps and rebroadcasts settings:changed).
+  async function setBgValue(key: 'bg_image_opacity' | 'bg_image_blur' | 'bg_image_brightness', value: number) {
+    if (key === 'bg_image_opacity') bgOpacity = value;
+    else if (key === 'bg_image_blur') bgBlur = value;
+    else bgBrightness = value;
+    const updated = await setSetting(key, String(Math.round(value)));
+    settings.set(updated);
+  }
 
   let themes = $state<Theme[]>([]);
   let osDark = $state(window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -47,6 +133,8 @@
           themes = updated;
         })
       );
+      await refreshBackground();
+      cleanups.push(await onBackgroundChanged(refreshBackground));
     })();
 
     return () => {
@@ -249,9 +337,140 @@
       </div>
     {/if}
   </div>
+
+  <!-- Background image -->
+  <div class="group-label bg-group-label">{m.appearance_group_background()}</div>
+
+  <div class="bg-row">
+    <div class="bg-meta">
+      <span class="bg-label">{m.appearance_group_background()}</span>
+      <span class="bg-file" class:custom={bgName !== null}>{bgName ?? m.appearance_bg_none()}</span>
+    </div>
+    <div class="bg-actions">
+      {#if bgName !== null}
+        <button class="btn-sm btn-restore" onclick={removeBackground}>{m.appearance_bg_remove()}</button>
+      {/if}
+      <button class="btn-sm" onclick={pickBackground}>{m.appearance_bg_choose()}</button>
+    </div>
+  </div>
+  {#if bgError}
+    <p class="bg-error">{bgError}</p>
+  {/if}
+
+  <SettingsToggle
+    label={m.appearance_bg_toggle()}
+    description={m.appearance_bg_toggle_desc()}
+    checked={$settings.bg_image_enabled}
+    onclick={toggleBackground}
+  />
+
+  {#if $settings.bg_image_enabled}
+    <SettingsSlider
+      label={m.appearance_bg_opacity()}
+      value={bgOpacity}
+      min={0}
+      max={100}
+      display={`${Math.round(bgOpacity)}%`}
+      oninput={(v) => setBgValue('bg_image_opacity', v)}
+    />
+    <SettingsSlider
+      label={m.appearance_bg_blur()}
+      value={bgBlur}
+      min={0}
+      max={40}
+      display={`${Math.round(bgBlur)} px`}
+      oninput={(v) => setBgValue('bg_image_blur', v)}
+    />
+    <SettingsSlider
+      label={m.appearance_bg_brightness()}
+      value={bgBrightness}
+      min={20}
+      max={150}
+      display={`${Math.round(bgBrightness)}%`}
+      oninput={(v) => setBgValue('bg_image_brightness', v)}
+    />
+  {/if}
 </div>
 
 <style>
+  .bg-group-label {
+    padding-top: 20px;
+  }
+
+  .bg-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--color-separator);
+  }
+
+  .bg-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .bg-label {
+    font-size: 0.85rem;
+    color: var(--color-foreground);
+    letter-spacing: 0.02em;
+  }
+
+  .bg-file {
+    font-size: 0.72rem;
+    font-family: monospace;
+    color: var(--color-foreground-darker, rgba(255, 255, 255, 0.35));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
+  }
+
+  .bg-file.custom {
+    color: var(--color-accent);
+  }
+
+  .bg-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .btn-sm {
+    font-size: 0.72rem;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid color-mix(in oklch, var(--color-foreground) 20%, transparent);
+    background: var(--color-hover);
+    color: var(--color-foreground);
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+
+  .btn-sm:hover {
+    background: color-mix(in oklch, var(--color-foreground) 17%, transparent);
+  }
+
+  .btn-restore {
+    color: var(--color-foreground-darker, rgba(255, 255, 255, 0.5));
+  }
+
+  .btn-restore:hover {
+    color: var(--color-foreground);
+  }
+
+  .bg-error {
+    margin: 0;
+    padding: 2px 20px 8px;
+    font-size: 0.72rem;
+    color: var(--color-danger, #e05252);
+    font-family: monospace;
+  }
+
   .section {
     display: flex;
     flex-direction: column;

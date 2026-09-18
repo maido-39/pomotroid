@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { getCurrentWebviewWindow, WebviewWindow } from '@tauri-apps/api/webviewWindow';
-  import { setWindowVisibility } from '$lib/ipc';
+  import { setWindowVisibility } from '$lib/backend';
   import { settings } from '$lib/stores/settings';
-  import { isMac } from '$lib/utils/platform';
+  import { isMac, useInAppNav } from '$lib/utils/platform';
+  import { goto } from '$app/navigation';
   import Tooltip from './Tooltip.svelte';
   import * as m from '$paraglide/messages.js';
 
@@ -21,6 +22,7 @@
   }
 
   onMount(() => {
+    if (useInAppNav) return;
     const win = getCurrentWebviewWindow();
     win.isMaximized().then((v) => {
       maximized = v;
@@ -44,6 +46,10 @@
   });
 
   async function openSettings() {
+    if (useInAppNav) {
+      await goto('/settings');
+      return;
+    }
     const existing = await WebviewWindow.getByLabel('settings');
     if (existing) {
       await existing.show();
@@ -67,6 +73,10 @@
   }
 
   async function openStats() {
+    if (useInAppNav) {
+      await goto('/stats');
+      return;
+    }
     const existing = await WebviewWindow.getByLabel('stats');
     if (existing) {
       await existing.show();
@@ -181,14 +191,17 @@
 <nav class="titlebar" class:suppress-hover={suppressTitlebarHover} data-tauri-drag-region>
   <!-- Left: settings + stats buttons on Linux/Windows. On macOS the traffic
        lights live here; the action buttons move to the right side instead. -->
-  {#if !isMac}
+  {#if !isMac || useInAppNav}
     {@render settingsBtn()}
     {@render statsBtn()}
   {/if}
 
-  <!-- Right: settings + stats buttons on macOS, window controls on Linux/Windows. -->
+  <!-- Right: settings + stats buttons on macOS, window controls on Linux/Windows.
+       Mobile and the browser build have no window controls. -->
   <div class="controls">
-    {#if isMac}
+    {#if useInAppNav}
+      <!-- no window controls -->
+    {:else if isMac}
       {@render statsBtn()}
       {@render settingsBtn()}
     {:else}

@@ -3,15 +3,16 @@
   import { onMount } from 'svelte';
   import Titlebar from '$lib/components/Titlebar.svelte';
   import Timer from '$lib/components/Timer.svelte';
-  import { getSettings, getThemes, onSettingsChanged, onThemesChanged } from '$lib/ipc';
+  import Backdrop from '$lib/components/Backdrop.svelte';
+  import { getSettings, getThemes, onSettingsChanged, onThemesChanged } from '$lib/backend';
   import { settings } from '$lib/stores/settings';
   import { applyTheme } from '$lib/stores/theme';
   import { resolveThemeName } from '$lib/utils/theme';
-  import { isMac } from '$lib/utils/platform';
+  import { isMac, isDesktopWindow } from '$lib/utils/platform';
   import { setLocale } from '$lib/locale.svelte.js';
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
   import type { UnlistenFn } from '@tauri-apps/api/event';
-  import { info, error as logError } from '@tauri-apps/plugin-log';
+  import { info, error as logError } from '$lib/utils/log';
   import { createLocalShortcutHandler } from '$lib/utils/localShortcuts';
 
   // Local shortcut state — volume and fullscreen tracked separately so the
@@ -101,7 +102,7 @@
         const osDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
         const active = themes.find((t) => t.name === resolveThemeName(s, osDark)) ?? themes[0];
         if (active) applyTheme(active);
-        await getCurrentWebviewWindow().show();
+        if (isDesktopWindow) await getCurrentWebviewWindow().show();
         await info(`[main] initialized, theme=${active?.name ?? 'none'}`);
       } catch (e) {
         await logError(`[main] initialization failed: ${e}`);
@@ -160,7 +161,7 @@
 
 <!-- Resize handles — invisible edge/corner strips for decorations-free windows.
      Not needed on macOS where native resizing is provided by decorations:true. -->
-{#if !isMac}
+{#if isDesktopWindow && !isMac}
   <!-- N -->
   <div class="rh rh-n" onmousedown={() => startResize('North')} role="none"></div>
   <!-- S -->
@@ -180,6 +181,7 @@
 {/if}
 
 <div class="app">
+  <Backdrop />
   <Titlebar />
   <main class:compact={isCompact}>
     <Timer {isCompact} {uiScale} />
@@ -188,12 +190,19 @@
 
 <style>
   .app {
+    position: relative;
     width: 100%;
     height: 100%;
     display: flex;
     flex-direction: column;
     overflow: hidden;
     animation: app-fade-in 0.4s var(--transition-slow) both;
+  }
+
+  /* Keep the chrome above the backdrop layer. */
+  .app > :global(:not(.backdrop)) {
+    position: relative;
+    z-index: 1;
   }
 
   main {
