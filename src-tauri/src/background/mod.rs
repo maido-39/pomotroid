@@ -40,13 +40,18 @@ pub fn find_file(bg_dir: &Path) -> Option<PathBuf> {
         .find(|p| p.file_stem().and_then(|s| s.to_str()) == Some(STEM))
 }
 
-/// Validate and normalise the extension of a user-supplied file name.
-pub fn extension_for(name: &str) -> Result<String, String> {
-    let ext = Path::new(name)
+/// Lowercased extension of `name`, or empty when it has none.
+fn raw_extension(name: &str) -> String {
+    Path::new(name)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+/// Validate and normalise the extension of a user-supplied file name.
+pub fn extension_for(name: &str) -> Result<String, String> {
+    let ext = raw_extension(name);
     if ALLOWED_EXTENSIONS.contains(&ext.as_str()) {
         Ok(ext)
     } else {
@@ -54,6 +59,27 @@ pub fn extension_for(name: &str) -> Result<String, String> {
             "unsupported image type '{ext}' (use {})",
             ALLOWED_EXTENSIONS.join(", ")
         ))
+    }
+}
+
+/// Identify the image type from its leading bytes.
+///
+/// The Android photo picker hands back `content://` URIs that carry no file
+/// extension, so for the byte-upload path the signature is the only reliable
+/// signal.
+pub fn sniff_extension(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if bytes.starts_with(b"\xFF\xD8\xFF") {
+        Some("jpg")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if bytes.starts_with(b"BM") {
+        Some("bmp")
+    } else {
+        None
     }
 }
 
@@ -89,7 +115,19 @@ pub fn store_bytes(bg_dir: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, S
     if bytes.len() > MAX_BYTES {
         return Err(format!("image is too large (max {} MB)", MAX_BYTES / 1024 / 1024));
     }
-    let ext = extension_for(name)?;
+    // Trust the signature first: a file picked on Android arrives with no
+    // usable name. The name stays as a fallback for anything the sniffer does
+    // not recognise but the desktop picker accepted.
+    let ext = match sniff_extension(bytes) {
+        Some(ext) => ext.to_string(),
+        None if raw_extension(name).is_empty() => {
+            return Err(format!(
+                "unrecognised image data (use {})",
+                ALLOWED_EXTENSIONS.join(", ")
+            ))
+        }
+        None => extension_for(name)?,
+    };
     std::fs::create_dir_all(bg_dir).map_err(|e| e.to_string())?;
     clear(bg_dir).map_err(|e| e.to_string())?;
     let dest = bg_dir.join(format!("{STEM}.{ext}"));
@@ -200,6 +238,41 @@ mod tests {
         assert!(store_from_path(&dir, &src_dir.join("missing.png")).is_err());
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&src_dir).ok();
+    }
+
+    #[test]
+    fn sniffs_type_from_signature() {
+        assert_eq!(sniff_extension(b"\x89PNG\r\n\x1a\nrest"), Some("png"));
+        assert_eq!(sniff_extension(b"\xFF\xD8\xFF\xE0rest"), Some("jpg"));
+        assert_eq!(sniff_extension(b"RIFF\x00\x00\x00\x00WEBPrest"), Some("webp"));
+        assert_eq!(sniff_extension(b"GIF89arest"), Some("gif"));
+        assert_eq!(sniff_extension(b"BMrest"), Some("bmp"));
+        assert_eq!(sniff_extension(b"%PDF-1.7"), None);
+        assert_eq!(sniff_extension(b"RIFF\x00\x00\x00\x00WAVE"), None);
+        assert_eq!(sniff_extension(b""), None);
+    }
+
+    #[test]
+    fn stores_extensionless_name_by_signature() {
+        // The Android photo picker returns `content://…/media/1000000034`:
+        // no extension, so only the bytes identify the image.
+        let dir = tmp("sniff");
+        let dest = store_bytes(&dir, "1000000034", b"\x89PNG\r\n\x1a\nrest").unwrap();
+        assert_eq!(dest.file_name().unwrap().to_str().unwrap(), "custom_background.png");
+        assert!(read_data_url(&dir).unwrap().starts_with("data:image/png;base64,"));
+
+        // Bytes that are not an image are still rejected.
+        let err = store_bytes(&dir, "1000000035", b"%PDF-1.7 not an image").unwrap_err();
+        assert!(err.contains("unrecognised image data"), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn signature_wins_over_a_misleading_name() {
+        let dir = tmp("mismatch");
+        let dest = store_bytes(&dir, "screenshot.gif", b"\x89PNG\r\n\x1a\nrest").unwrap();
+        assert_eq!(dest.file_name().unwrap().to_str().unwrap(), "custom_background.png");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
