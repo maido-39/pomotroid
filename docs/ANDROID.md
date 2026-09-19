@@ -64,7 +64,12 @@ python scripts/sync_android.py
 - allows cleartext traffic in release builds (LAN pairing uses plain `ws://`)
 - adds the `androidx.core:core-ktx` dependency
 
-Re-run it after any `tauri android init` that regenerates the project.
+Re-run it after any `tauri android init` that regenerates the project, and
+**after every edit to `src-tauri/android-plugin/`** — those files are the source
+of truth, but Gradle compiles the copies under `gen/android/`, which are
+committed. Commit both sides together: a plugin change whose generated copy is
+left behind builds an app missing the new `@Command`s, and Rust only finds out
+at runtime ("No command … found for plugin").
 
 ## Windows gotchas
 
