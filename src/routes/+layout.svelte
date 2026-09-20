@@ -1,12 +1,19 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { isWeb } from '$lib/utils/platform';
+  import { isMobile, isWeb } from '$lib/utils/platform';
   import { startWebSession } from '$lib/backend';
   import * as web from '$lib/remote/web';
   import * as m from '$paraglide/messages.js';
   import type { Snippet } from 'svelte';
 
   let { children }: { children?: Snippet } = $props();
+
+  // Marks the Android build for the status bar inset rule in `app.css`. Set
+  // during init rather than in `onMount` so the bar is never painted at the
+  // wrong height first.
+  if (typeof document !== 'undefined' && isMobile) {
+    document.documentElement.classList.add('is-mobile');
+  }
 
   // Browser build: audio needs a user gesture before it may play.
   let needsAudioUnlock = $state(isWeb);

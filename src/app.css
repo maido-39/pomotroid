@@ -72,6 +72,20 @@ body {
   user-select: none;
 }
 
+/* Android draws the app edge to edge, and its WebView reports a safe-area
+   inset only for a display cutout — never for the status bar. On a phone
+   without a cutout the insets above are therefore 0 and the top bar ends up
+   underneath the clock and battery icons, where its buttons cannot be tapped.
+   Pad the bar itself (not `body`, so the backdrop still reaches the top of
+   the screen) by whatever the platform reports, but never less than
+   Android's 24dp status bar. `.is-mobile` is set in `+layout.svelte`; the
+   extra `html` keeps this ahead of the components' own scoped rules. */
+html.is-mobile .titlebar {
+  --titlebar-safe-top: max(env(safe-area-inset-top, 0px), 24px);
+  height: calc(40px + var(--titlebar-safe-top));
+  padding-top: var(--titlebar-safe-top);
+}
+
 /* ---------------------------------------------------------------------------
    Keyframes (available to all scoped component stylesheets)
    --------------------------------------------------------------------------- */
