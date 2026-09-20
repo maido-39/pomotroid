@@ -49,5 +49,8 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("bg_image_opacity", "60"),
     ("bg_image_blur", "8"),
     ("bg_image_brightness", "70"),
+    ("bg_image_pos_x", "50"),
+    ("bg_image_pos_y", "50"),
+    ("bg_image_zoom", "100"),
     ("bg_image_name", ""),
 ];

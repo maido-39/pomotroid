@@ -19,12 +19,15 @@
   import * as m from '$paraglide/messages.js';
   import SettingsToggle from '$lib/components/settings/SettingsToggle.svelte';
   import SettingsSlider from '$lib/components/settings/SettingsSlider.svelte';
+  import BackgroundFraming from '$lib/components/settings/BackgroundFraming.svelte';
+  import { FRAMING_DEFAULTS } from '$lib/utils/backdrop';
   import { isMobile } from '$lib/utils/platform';
   import { readPickedFileAsBase64 } from '$lib/utils/files';
   import { error as logError, warn } from '$lib/utils/log';
 
   // --- Background image ---
   let bgName = $state<string | null>(null);
+  let bgDataUrl = $state<string | null>(null);
   let bgError = $state<string | null>(null);
   // Local mirrors so the sliders move instantly while the save round-trips.
   let bgOpacity = $state($settings.bg_image_opacity);
@@ -40,6 +43,7 @@
     try {
       const info = await getBackground();
       bgName = info?.name ?? null;
+      bgDataUrl = info?.data_url ?? null;
     } catch (err) {
       await warn(`[background] getBackground failed: ${err}`);
     }
@@ -62,6 +66,9 @@
       } else {
         bgName = await setCustomBackground(path);
       }
+      // A new image has nothing to do with how the old one was framed.
+      await resetFraming();
+      await refreshBackground();
     } catch (err) {
       await logError(`[background] set failed: ${err}`);
       bgError = String(err);
@@ -73,6 +80,7 @@
     try {
       await clearCustomBackground();
       bgName = null;
+      bgDataUrl = null;
     } catch (err) {
       await logError(`[background] clear failed: ${err}`);
       bgError = String(err);
@@ -92,6 +100,37 @@
     else bgBrightness = value;
     const updated = await setSetting(key, String(Math.round(value)));
     settings.set(updated);
+  }
+
+  // Framing: the gesture updates the store optimistically so the live backdrop
+  // tracks the drag, and only the end of the gesture reaches the database.
+  function previewFraming(posX: number, posY: number, zoom: number) {
+    settings.set({
+      ...$settings,
+      bg_image_pos_x: posX,
+      bg_image_pos_y: posY,
+      bg_image_zoom: zoom,
+    });
+  }
+
+  async function commitFraming(posX: number, posY: number, zoom: number) {
+    const wanted: [string, number][] = [
+      ['bg_image_pos_x', posX],
+      ['bg_image_pos_y', posY],
+      ['bg_image_zoom', zoom],
+    ];
+    try {
+      for (const [key, value] of wanted) {
+        const updated = await setSetting(key, String(Math.round(value)));
+        settings.set(updated);
+      }
+    } catch (err) {
+      await logError(`[background] framing save failed: ${err}`);
+    }
+  }
+
+  async function resetFraming() {
+    await commitFraming(FRAMING_DEFAULTS.posX, FRAMING_DEFAULTS.posY, FRAMING_DEFAULTS.zoom);
   }
 
   let themes = $state<Theme[]>([]);
@@ -365,6 +404,17 @@
   />
 
   {#if $settings.bg_image_enabled}
+    {#if bgDataUrl}
+      <BackgroundFraming
+        dataUrl={bgDataUrl}
+        posX={$settings.bg_image_pos_x}
+        posY={$settings.bg_image_pos_y}
+        zoom={$settings.bg_image_zoom}
+        onchange={previewFraming}
+        oncommit={commitFraming}
+        onreset={resetFraming}
+      />
+    {/if}
     <SettingsSlider
       label={m.appearance_bg_opacity()}
       value={bgOpacity}

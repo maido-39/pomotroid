@@ -64,6 +64,14 @@ pub struct Settings {
     pub bg_image_blur: u32,
     /// Brightness in percent, 20–150.
     pub bg_image_brightness: u32,
+    /// Framing of the image inside the window, as a percentage of the part
+    /// that does not fit: 0 = flush left/top, 50 = centred, 100 = flush
+    /// right/bottom. Has no effect on an axis the image does not overflow.
+    pub bg_image_pos_x: u32,
+    pub bg_image_pos_y: u32,
+    /// Zoom in percent on top of "cover", 100–300. Above 100 the image
+    /// overflows on both axes, so both positions become meaningful.
+    pub bg_image_zoom: u32,
     /// Original file name of the chosen image ("" = none).
     pub bg_image_name: String,
     pub language: String,
@@ -140,6 +148,9 @@ impl Default for Settings {
             bg_image_opacity: 60,
             bg_image_blur: 8,
             bg_image_brightness: 70,
+            bg_image_pos_x: 50,
+            bg_image_pos_y: 50,
+            bg_image_zoom: 100,
             bg_image_name: String::new(),
             language: "auto".to_string(),
             verbose_logging: false,
@@ -276,6 +287,9 @@ pub fn load(conn: &Connection) -> Result<Settings> {
         bg_image_opacity: parse_u32(&map, "bg_image_opacity", d.bg_image_opacity).min(100),
         bg_image_blur: parse_u32(&map, "bg_image_blur", d.bg_image_blur).min(40),
         bg_image_brightness: parse_u32(&map, "bg_image_brightness", d.bg_image_brightness).clamp(20, 150),
+        bg_image_pos_x: parse_u32(&map, "bg_image_pos_x", d.bg_image_pos_x).min(100),
+        bg_image_pos_y: parse_u32(&map, "bg_image_pos_y", d.bg_image_pos_y).min(100),
+        bg_image_zoom: parse_u32(&map, "bg_image_zoom", d.bg_image_zoom).clamp(100, 300),
         bg_image_name: map.get("bg_image_name").cloned().unwrap_or(d.bg_image_name),
         language: map.get("language").cloned().unwrap_or(d.language),
         verbose_logging: parse_bool(&map, "verbose_logging", d.verbose_logging),
@@ -503,6 +517,11 @@ mod tests {
         assert_eq!(s.sound_tick, "default");
         assert!(!s.bg_image_enabled);
         assert_eq!((s.bg_image_opacity, s.bg_image_blur, s.bg_image_brightness), (60, 8, 70));
+        assert_eq!(
+            (s.bg_image_pos_x, s.bg_image_pos_y, s.bg_image_zoom),
+            (50, 50, 100),
+            "a new image starts centred and unzoomed"
+        );
         assert!(!s.websocket_lan_enabled);
         assert!(s.websocket_token.is_empty());
 
@@ -512,6 +531,9 @@ mod tests {
         save_setting(&conn, "bg_image_blur", "99").unwrap();
         save_setting(&conn, "bg_image_brightness", "5").unwrap();
         save_setting(&conn, "bg_image_name", "sunset.jpg").unwrap();
+        save_setting(&conn, "bg_image_pos_x", "140").unwrap();
+        save_setting(&conn, "bg_image_pos_y", "0").unwrap();
+        save_setting(&conn, "bg_image_zoom", "12").unwrap();
         save_setting(&conn, "websocket_lan_enabled", "true").unwrap();
         save_setting(&conn, "websocket_token", "abc123").unwrap();
         let s = load(&conn).unwrap();
@@ -521,6 +543,9 @@ mod tests {
         assert_eq!(s.bg_image_blur, 40, "blur clamps to 40");
         assert_eq!(s.bg_image_brightness, 20, "brightness clamps to 20");
         assert_eq!(s.bg_image_name, "sunset.jpg");
+        assert_eq!(s.bg_image_pos_x, 100, "position clamps to 100");
+        assert_eq!(s.bg_image_pos_y, 0, "0 is a valid position, not a missing value");
+        assert_eq!(s.bg_image_zoom, 100, "zoom clamps up to 100");
         assert!(s.websocket_lan_enabled);
         assert_eq!(s.websocket_token, "abc123");
     }

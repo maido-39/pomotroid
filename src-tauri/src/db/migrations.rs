@@ -108,6 +108,15 @@ const MIGRATION_7: &str = "
     INSERT INTO schema_version VALUES (7);
 ";
 
+/// Seeds the framing settings for the background image. Existing users keep
+/// the centred, unzoomed framing they have been looking at.
+const MIGRATION_8: &str = "
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('bg_image_pos_x', '50');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('bg_image_pos_y', '50');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('bg_image_zoom', '100');
+    INSERT INTO schema_version VALUES (8);
+";
+
 /// Apply any pending migrations. Each migration is wrapped in a transaction
 /// so a partial failure leaves the database unchanged.
 pub fn run(conn: &Connection) -> Result<()> {
@@ -155,6 +164,12 @@ pub fn run(conn: &Connection) -> Result<()> {
         log::info!("[db/migrations] MIGRATION_7 complete");
     }
 
+    if version < 8 {
+        log::info!("[db/migrations] applying MIGRATION_8: seed background image framing settings");
+        conn.execute_batch(&format!("BEGIN; {MIGRATION_8} COMMIT;"))?;
+        log::info!("[db/migrations] MIGRATION_8 complete");
+    }
+
     Ok(())
 }
 
@@ -190,7 +205,7 @@ mod tests {
         let v: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 7);
+        assert_eq!(v, 8);
     }
 
     #[test]

@@ -51,6 +51,9 @@ export interface Settings {
   bg_image_opacity: number; // 0–100
   bg_image_blur: number; // px, 0–40
   bg_image_brightness: number; // %, 20–150
+  bg_image_pos_x: number; // %, 0–100 of the overflow (50 = centred)
+  bg_image_pos_y: number; // %, 0–100 of the overflow (50 = centred)
+  bg_image_zoom: number; // %, 100–300 on top of "cover"
   bg_image_name: string; // '' = none
   theme_mode: string; // 'auto' | 'light' | 'dark'
   theme_light: string;

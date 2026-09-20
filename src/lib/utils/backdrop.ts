@@ -1,0 +1,98 @@
+// Geometry for the custom background image.
+//
+// CSS `background-size: cover` crops the image to the window but gives no say
+// in *which* part survives, and `background-position` can only pan along the
+// axis that happens to overflow. Computing the size in pixels instead lets a
+// zoom apply on top of cover — so both axes overflow — and turns the two
+// stored positions into a straight percentage of whatever is cropped away.
+//
+// `Backdrop.svelte` and the framing preview in settings both go through here,
+// so what the preview shows is what the backdrop paints, and the preview can
+// convert a drag in pixels back into a position.
+
+export interface Size {
+  w: number;
+  h: number;
+}
+
+export interface Geometry {
+  /** Painted size of the image. */
+  w: number;
+  h: number;
+  /** Top-left offset of the painted image, <= 0. */
+  x: number;
+  y: number;
+  /** How many pixels are cropped away on each axis, >= 0. */
+  overflowX: number;
+  overflowY: number;
+}
+
+export interface Framing {
+  /** Value for CSS `background-size`. */
+  size: string;
+  /** Value for CSS `background-position`. */
+  position: string;
+}
+
+/** Centred and unzoomed — what a newly chosen image starts at. */
+export const FRAMING_DEFAULTS = { posX: 50, posY: 50, zoom: 100 } as const;
+
+/** Mirrors the clamp the Rust side applies when loading settings. */
+export function clampPos(value: number): number {
+  return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+/** Mirrors the clamp the Rust side applies when loading settings. */
+export function clampZoom(value: number): number {
+  return Math.min(300, Math.max(100, Math.round(value)));
+}
+
+/**
+ * Where `image` lands inside `container` at `zoom` percent of cover, with the
+ * cropped-away part distributed by `posX`/`posY` (0 = flush left/top,
+ * 50 = centred, 100 = flush right/bottom).
+ *
+ * Returns null until both sizes are known.
+ */
+export function framingGeometry(
+  container: Size,
+  image: Size,
+  posX: number,
+  posY: number,
+  zoom: number
+): Geometry | null {
+  if (container.w <= 0 || container.h <= 0 || image.w <= 0 || image.h <= 0) return null;
+  const cover = Math.max(container.w / image.w, container.h / image.h);
+  const scale = cover * (clampZoom(zoom) / 100);
+  const w = image.w * scale;
+  const h = image.h * scale;
+  // Rounding can leave a sub-pixel sliver on the axis that drives cover;
+  // treating anything under a pixel as "fits" keeps that axis from drifting.
+  const overflowX = Math.max(0, w - container.w) < 1 ? 0 : w - container.w;
+  const overflowY = Math.max(0, h - container.h) < 1 ? 0 : h - container.h;
+  return {
+    w,
+    h,
+    x: -overflowX * (clampPos(posX) / 100),
+    y: -overflowY * (clampPos(posY) / 100),
+    overflowX,
+    overflowY,
+  };
+}
+
+/**
+ * The same geometry as CSS values. Falls back to plain centred cover until
+ * both sizes are known, so the backdrop never flashes at the wrong scale
+ * while the image is decoding.
+ */
+export function frameBackground(
+  container: Size,
+  image: Size,
+  posX: number,
+  posY: number,
+  zoom: number
+): Framing {
+  const g = framingGeometry(container, image, posX, posY, zoom);
+  if (!g) return { size: 'cover', position: '50% 50%' };
+  return { size: `${g.w}px ${g.h}px`, position: `${g.x}px ${g.y}px` };
+}
