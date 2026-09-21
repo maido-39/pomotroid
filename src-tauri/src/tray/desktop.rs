@@ -295,6 +295,7 @@ pub fn create_tray(app: &AppHandle, state: &Arc<TrayState>) {
                             let _ = window.show();
                             let _ = window.unminimize();
                             let _ = window.set_focus();
+                            crate::commands::apply_always_on_top(app);
                         }
                     }
                 }
@@ -323,6 +324,7 @@ pub fn create_tray(app: &AppHandle, state: &Arc<TrayState>) {
                         let _ = window.show();
                         let _ = window.unminimize();
                         let _ = window.set_focus();
+                        crate::commands::apply_always_on_top(app);
                     }
                 }
                 "exit" => {

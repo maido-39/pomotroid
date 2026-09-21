@@ -181,18 +181,11 @@ pub fn settings_set_impl(app: &AppHandle, key: &str, value: &str) -> Result<Sett
         }
     }
 
-    // Apply always-on-top window flag immediately when the setting changes,
-    // accounting for the current round type so break_always_on_top takes
-    // effect without waiting for the next round transition.
+    // Apply always-on-top immediately when either input changes, so
+    // break_always_on_top takes effect without waiting for a round transition.
     #[cfg(desktop)]
     if matches!(key, "always_on_top" | "break_always_on_top") {
-        if let Some(window) = app.get_webview_window("main") {
-            let snap = timer.get_snapshot();
-            let is_break = snap.round_type != "work";
-            let effective_aot = new_settings.always_on_top
-                && !(new_settings.break_always_on_top && is_break);
-            let _ = window.set_always_on_top(effective_aot);
-        }
+        apply_always_on_top(app);
     }
 
     // Sync tray countdown mode when the dial setting changes, then immediately
@@ -494,6 +487,22 @@ pub fn stats_get_heatmap(app: AppHandle) -> Result<HeatmapStats, String> {
 // CMD-05 — Window commands
 // ---------------------------------------------------------------------------
 
+/// Reassert the always-on-top flag the current settings and round call for.
+///
+/// Showing or focusing a window can leave it below other windows, so every
+/// path that restores the window calls this rather than assuming the flag
+/// survived. Safe to call when the timer state is not registered yet.
+#[cfg(desktop)]
+pub fn apply_always_on_top(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Some(timer) = app.try_state::<TimerController>() else {
+        return;
+    };
+    let _ = window.set_always_on_top(timer.wants_always_on_top());
+}
+
 /// Show or hide the main window.
 #[tauri::command]
 pub fn window_set_visibility(visible: bool, app: AppHandle) -> Result<(), String> {
@@ -504,6 +513,8 @@ pub fn window_set_visibility(visible: bool, app: AppHandle) -> Result<(), String
     if visible {
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
+        #[cfg(desktop)]
+        apply_always_on_top(&app);
     } else {
         window.hide().map_err(|e| e.to_string())?;
     }

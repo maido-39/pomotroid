@@ -374,10 +374,9 @@ fn setup_desktop_window(app: &mut tauri::App, initial_settings: &settings::Setti
         }
     }
 
-    // Apply always-on-top from saved settings on startup.
-    if initial_settings.always_on_top {
-        let _ = main_window.set_always_on_top(true);
-    }
+    // Apply always-on-top from saved settings on startup. Goes through the
+    // shared helper so the break rule is honoured here too.
+    commands::apply_always_on_top(app.handle());
 
     // Restore saved window position/size if all four values are present and
     // the saved rectangle still intersects at least one connected monitor.
@@ -417,6 +416,7 @@ fn setup_desktop_window(app: &mut tauri::App, initial_settings: &settings::Setti
     let app_for_close = app.handle().clone();
     let db_for_pos = db.clone();
     let win_for_pos = main_window.clone();
+    let app_for_focus = app.handle().clone();
     main_window.on_window_event(move |event| {
         match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -437,6 +437,14 @@ fn setup_desktop_window(app: &mut tauri::App, initial_settings: &settings::Setti
                         }
                     }
                 }
+            }
+            // Windows can drop a window out of the topmost band for reasons
+            // outside the app (a full-screen program taking over, a shell
+            // restart). Reasserting when the user comes back to the window
+            // costs nothing when the flag is already right, and means the
+            // window is never left stuck behind the others.
+            tauri::WindowEvent::Focused(true) => {
+                commands::apply_always_on_top(&app_for_focus);
             }
             tauri::WindowEvent::Moved(pos) => {
                 if let Ok(conn) = db_for_pos.lock() {

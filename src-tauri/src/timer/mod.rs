@@ -53,6 +53,17 @@ struct TimerShared {
 // TimerController — public API registered as Tauri state
 // ---------------------------------------------------------------------------
 
+/// Whether the main window should sit above other windows right now.
+///
+/// "Lower priority during breaks" makes this depend on the round as well as
+/// the setting, so the answer changes on its own as the timer advances. Every
+/// path that can change either input — and every path that re-shows the
+/// window — has to reapply the result, or the window is left behind other
+/// windows with nothing to raise it again.
+pub fn wants_always_on_top(settings: &Settings, round: RoundType) -> bool {
+    settings.always_on_top && !(settings.break_always_on_top && round != RoundType::Work)
+}
+
 pub struct TimerController {
     engine: EngineHandle,
     sequence: Arc<Mutex<SequenceState>>,
@@ -185,6 +196,14 @@ impl TimerController {
     }
 
     // --- Query ---
+
+    /// Whether the main window should sit above other windows right now.
+    /// See the free function of the same name.
+    pub fn wants_always_on_top(&self) -> bool {
+        let round = self.sequence.lock().unwrap().current_round;
+        let settings = self.settings.lock().unwrap();
+        wants_always_on_top(&settings, round)
+    }
 
     pub fn get_snapshot(&self) -> TimerSnapshot {
         let seq = self.sequence.lock().unwrap();
@@ -368,22 +387,18 @@ fn listen_events(
                     audio.play_cue(cue);
                 }
 
-                // Lower-priority-during-breaks: when always_on_top is on and
-                // break_always_on_top is enabled, disable always-on-top for
-                // breaks and restore it when work resumes.
-                let (always_on_top, break_always_on_top) = {
-                    let s = settings.lock().unwrap();
-                    (s.always_on_top, s.break_always_on_top)
-                };
+                // Lower-priority-during-breaks: the answer changes with the
+                // round, so reapply it on every transition.
                 #[cfg(desktop)]
-                if always_on_top {
+                {
+                    let wanted = {
+                        let s = settings.lock().unwrap();
+                        wants_always_on_top(&s, next_round)
+                    };
                     if let Some(window) = app.get_webview_window("main") {
-                        let is_break = next_round != RoundType::Work;
-                        let _ = window.set_always_on_top(!(break_always_on_top && is_break));
+                        let _ = window.set_always_on_top(wanted);
                     }
                 }
-                #[cfg(mobile)]
-                let _ = (always_on_top, break_always_on_top);
 
                 // Update tray to reflect new round type and reset progress.
                 // Use -1.0 (same as initialisation and Reset) so the very
@@ -474,6 +489,20 @@ fn listen_events(
                 }
                 let snapshot = build_snapshot(&sequence, &settings, &shared);
                 let _ = app.emit("timer:reset", snapshot.clone());
+
+                // Reset sends the sequence back to a work round. If a break
+                // had lowered the window, nothing else would raise it again.
+                #[cfg(desktop)]
+                {
+                    let wanted = {
+                        let round = sequence.lock().unwrap().current_round;
+                        let s = settings.lock().unwrap();
+                        wants_always_on_top(&s, round)
+                    };
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.set_always_on_top(wanted);
+                    }
+                }
                 if let Some(ws) = app.try_state::<Arc<WsState>>() {
                     websocket::broadcast_reset(&ws, snapshot.clone());
                 }
@@ -539,5 +568,48 @@ fn build_snapshot(
         work_round_number: seq.work_round_number,
         work_rounds_total: seq.work_rounds_total,
         session_work_count: seq.session_work_count,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings(always: bool, lower_for_breaks: bool) -> Settings {
+        Settings {
+            always_on_top: always,
+            break_always_on_top: lower_for_breaks,
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn always_on_top_follows_the_setting_when_breaks_are_not_lowered() {
+        for round in [RoundType::Work, RoundType::ShortBreak, RoundType::LongBreak] {
+            assert!(wants_always_on_top(&settings(true, false), round));
+            assert!(!wants_always_on_top(&settings(false, false), round));
+        }
+    }
+
+    #[test]
+    fn breaks_lower_the_window_and_work_raises_it_again() {
+        let s = settings(true, true);
+        assert!(wants_always_on_top(&s, RoundType::Work));
+        assert!(!wants_always_on_top(&s, RoundType::ShortBreak));
+        assert!(!wants_always_on_top(&s, RoundType::LongBreak));
+        // Reset returns the sequence to a work round, which is what makes the
+        // window come back up rather than staying behind the others.
+        let mut seq = SequenceState::new(4);
+        seq.current_round = RoundType::LongBreak;
+        seq.reset();
+        assert!(wants_always_on_top(&s, seq.current_round));
+    }
+
+    #[test]
+    fn lowering_breaks_does_nothing_while_always_on_top_is_off() {
+        let s = settings(false, true);
+        for round in [RoundType::Work, RoundType::ShortBreak, RoundType::LongBreak] {
+            assert!(!wants_always_on_top(&s, round));
+        }
     }
 }
