@@ -67,9 +67,27 @@ body {
   padding-top: env(safe-area-inset-top, 0px);
   padding-bottom: env(safe-area-inset-bottom, 0px);
   font-family: 'Mona Sans', system-ui, sans-serif;
-  background-color: var(--color-background);
   color: var(--color-foreground);
   user-select: none;
+}
+
+/* Window opacity. The window itself is transparent, so thinning the
+   background colour lets the desktop show through while the dial and its
+   text stay crisp. An alpha on the colour, not `opacity`: WebView2 drops the
+   whole surface when the page is given partial opacity.
+   Painted on `body` alone — the rule above covers `html` too, and two
+   translucent layers would compose to a much more opaque window than asked
+   for. Set from the settings store in `+layout.svelte`. */
+html {
+  background-color: transparent;
+}
+
+body {
+  background-color: color-mix(
+    in srgb,
+    var(--color-background) calc(var(--window-opacity, 1) * 100%),
+    transparent
+  );
 }
 
 /* Android draws the app edge to edge, and its WebView reports a safe-area

@@ -18,6 +18,9 @@ export const isMobile: boolean = isTauri && isAndroid;
 
 export const isMac: boolean = /Mac/.test(ua) && !isAndroid;
 
+/** Window translucency is a Win32 layered-window feature. */
+export const isWindows: boolean = /Windows/.test(ua) && !isAndroid;
+
 // Android user agents contain "Linux; Android", so exclude them explicitly.
 export const isLinux: boolean = /Linux/.test(ua) && !isAndroid;
 

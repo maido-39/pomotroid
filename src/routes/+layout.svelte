@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { isMobile, isWeb } from '$lib/utils/platform';
+  import { settings } from '$lib/stores/settings';
   import { startWebSession } from '$lib/backend';
   import * as web from '$lib/remote/web';
   import * as m from '$paraglide/messages.js';
@@ -14,6 +15,13 @@
   if (typeof document !== 'undefined' && isMobile) {
     document.documentElement.classList.add('is-mobile');
   }
+
+  // Window opacity, applied to the whole UI over a transparent window.
+  $effect(() => {
+    if (typeof document === 'undefined') return;
+    const pct = Math.min(100, Math.max(20, $settings.window_opacity ?? 100));
+    document.documentElement.style.setProperty('--window-opacity', String(pct / 100));
+  });
 
   // Browser build: audio needs a user gesture before it may play.
   let needsAudioUnlock = $state(isWeb);

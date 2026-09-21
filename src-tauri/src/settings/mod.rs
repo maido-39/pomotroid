@@ -14,6 +14,9 @@ use std::collections::HashMap;
 pub struct Settings {
     /// Launch the app when the user logs in.
     pub autostart_enabled: bool,
+    /// Opacity of the whole window in percent, 20–100. Below 100 the windows
+    /// behind show through, text and all.
+    pub window_opacity: u32,
     pub always_on_top: bool,
     pub break_always_on_top: bool,
     pub auto_start_work: bool,
@@ -102,6 +105,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             autostart_enabled: false,
+            window_opacity: 100,
             always_on_top: false,
             break_always_on_top: false,
             auto_start_work: true,
@@ -226,6 +230,7 @@ pub fn load(conn: &Connection) -> Result<Settings> {
     let d = Settings::default();
     Ok(Settings {
         autostart_enabled: parse_bool(&map, "autostart_enabled", d.autostart_enabled),
+        window_opacity: parse_u32(&map, "window_opacity", d.window_opacity).clamp(20, 100),
         always_on_top: parse_bool(&map, "always_on_top", d.always_on_top),
         break_always_on_top: parse_bool(&map, "break_always_on_top", d.break_always_on_top),
         auto_start_work: parse_bool(&map, "auto_start_work", d.auto_start_work),

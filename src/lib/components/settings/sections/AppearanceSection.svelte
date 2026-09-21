@@ -21,7 +21,7 @@
   import SettingsSlider from '$lib/components/settings/SettingsSlider.svelte';
   import BackgroundFraming from '$lib/components/settings/BackgroundFraming.svelte';
   import { FRAMING_DEFAULTS } from '$lib/utils/backdrop';
-  import { isMobile } from '$lib/utils/platform';
+  import { isMobile, isWindows } from '$lib/utils/platform';
   import { readPickedFileAsBase64 } from '$lib/utils/files';
   import { error as logError, warn } from '$lib/utils/log';
 
@@ -33,10 +33,12 @@
   let bgOpacity = $state($settings.bg_image_opacity);
   let bgBlur = $state($settings.bg_image_blur);
   let bgBrightness = $state($settings.bg_image_brightness);
+  let windowOpacity = $state($settings.window_opacity);
   $effect(() => {
     bgOpacity = $settings.bg_image_opacity;
     bgBlur = $settings.bg_image_blur;
     bgBrightness = $settings.bg_image_brightness;
+    windowOpacity = $settings.window_opacity;
   });
 
   async function refreshBackground() {
@@ -99,6 +101,12 @@
     else if (key === 'bg_image_blur') bgBlur = value;
     else bgBrightness = value;
     const updated = await setSetting(key, String(Math.round(value)));
+    settings.set(updated);
+  }
+
+  async function setWindowOpacity(value: number) {
+    windowOpacity = value;
+    const updated = await setSetting('window_opacity', String(Math.round(value)));
     settings.set(updated);
   }
 
@@ -377,6 +385,20 @@
     {/if}
   </div>
 
+  <!-- Window translucency (Win32 layered window) -->
+  {#if isWindows && !isMobile}
+    <div class="group-label bg-group-label">{m.appearance_group_window()}</div>
+    <SettingsSlider
+      label={m.appearance_window_opacity()}
+      value={windowOpacity}
+      min={20}
+      max={100}
+      display={`${Math.round(windowOpacity)}%`}
+      oninput={setWindowOpacity}
+    />
+    <p class="bg-hint">{m.appearance_window_opacity_desc()}</p>
+  {/if}
+
   <!-- Background image -->
   <div class="group-label bg-group-label">{m.appearance_group_background()}</div>
 
@@ -519,6 +541,15 @@
     font-size: 0.72rem;
     color: var(--color-danger, #e05252);
     font-family: monospace;
+  }
+
+  .bg-hint {
+    margin: 0;
+    padding: 0 20px 12px;
+    font-size: 0.7rem;
+    line-height: 1.4;
+    color: var(--color-foreground-darker, var(--color-foreground));
+    opacity: 0.7;
   }
 
   .section {
