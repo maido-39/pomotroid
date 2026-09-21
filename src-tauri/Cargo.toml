@@ -48,6 +48,7 @@ tokio-tungstenite = "0.29"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-autostart = "2"
 axum = { version = "0.8", features = ["ws"] }
 rodio = { version = "0.22", default-features = false, features = ["playback", "wav", "mp3", "vorbis"] }
 symphonia-codec-adpcm = "0.6.0"

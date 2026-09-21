@@ -12,6 +12,8 @@ use std::collections::HashMap;
 /// This struct is serialized to JSON and sent to the Svelte frontend via Tauri IPC.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Settings {
+    /// Launch the app when the user logs in.
+    pub autostart_enabled: bool,
     pub always_on_top: bool,
     pub break_always_on_top: bool,
     pub auto_start_work: bool,
@@ -99,6 +101,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            autostart_enabled: false,
             always_on_top: false,
             break_always_on_top: false,
             auto_start_work: true,
@@ -222,6 +225,7 @@ pub fn load(conn: &Connection) -> Result<Settings> {
     log::debug!("[settings] loaded {} keys from db", map.len());
     let d = Settings::default();
     Ok(Settings {
+        autostart_enabled: parse_bool(&map, "autostart_enabled", d.autostart_enabled),
         always_on_top: parse_bool(&map, "always_on_top", d.always_on_top),
         break_always_on_top: parse_bool(&map, "break_always_on_top", d.break_always_on_top),
         auto_start_work: parse_bool(&map, "auto_start_work", d.auto_start_work),

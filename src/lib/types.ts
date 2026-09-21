@@ -30,6 +30,7 @@ export interface Settings {
   min_to_tray: boolean;
   min_to_tray_on_close: boolean;
   notifications_enabled: boolean;
+  autostart_enabled: boolean;
   always_on_top: boolean;
   break_always_on_top: boolean;
   volume: number; // 0.0–1.0

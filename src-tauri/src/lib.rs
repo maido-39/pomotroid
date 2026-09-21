@@ -4,6 +4,7 @@ pub mod commands;
 pub mod db;
 pub mod mobile;
 pub mod notifications;
+pub mod paths;
 pub mod remote;
 pub mod settings;
 pub mod shortcuts;
@@ -39,14 +40,25 @@ use commands::{
     window_set_visibility,
 };
 
+/// Log folder for a portable copy. Resolved from the executable path rather
+/// than an `AppHandle`, because the log plugin is configured before one exists.
+fn portable_log_folder() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.parent()?.join("data").join("logs"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let log_targets = {
-        let mut t = vec![Target::new(TargetKind::LogDir { file_name: None })];
-        // On Android also mirror to logcat for `adb logcat` debugging.
-        if cfg!(mobile) {
-            t.push(Target::new(TargetKind::Stdout));
-        }
+        // A portable copy keeps its logs beside the executable too, so the
+        // whole folder can be zipped up and sent when reporting a problem.
+        let mut t = match paths::is_portable().then(portable_log_folder).flatten() {
+            Some(path) => vec![Target::new(TargetKind::Folder { path, file_name: None })],
+            None => vec![Target::new(TargetKind::LogDir { file_name: None })],
+        };
+        // Mirrored to stdout as well: logcat on Android, and the console on
+        // desktop when the app is started from a terminal to watch it live.
+        t.push(Target::new(TargetKind::Stdout));
         t
     };
 
@@ -66,7 +78,13 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_updater::Builder::new().build());
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        // Launch at login. The plugin only registers what it is told to, so
+        // nothing is written anywhere until the setting is switched on.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ));
 
     #[cfg(mobile)]
     let builder = builder
@@ -81,13 +99,17 @@ pub fn run() {
                 log::error!("PANIC: {info}");
             }));
 
-            let app_data_dir = app
-                .path()
-                .app_data_dir()
-                .expect("failed to resolve app data directory");
+            let app_data_dir =
+                paths::data_dir(app.handle()).expect("failed to resolve app data directory");
 
             std::fs::create_dir_all(&app_data_dir)
                 .expect("failed to create app data directory");
+
+            log::info!(
+                "[paths] {} build, data dir: {}",
+                if paths::is_portable() { "portable" } else { "installed" },
+                app_data_dir.display()
+            );
 
             // --- Database ---
             let db = match db::open(&app_data_dir) {
@@ -376,7 +398,11 @@ fn setup_desktop_window(app: &mut tauri::App, initial_settings: &settings::Setti
 
     // Apply always-on-top from saved settings on startup. Goes through the
     // shared helper so the break rule is honoured here too.
-    commands::apply_always_on_top(app.handle());
+    commands::apply_always_on_top(app.handle(), "startup");
+
+    // Re-register launch-at-login every start: the recorded path goes stale
+    // when a portable copy is moved, or when an installed copy is upgraded.
+    commands::apply_autostart(app.handle(), initial_settings.autostart_enabled);
 
     // Restore saved window position/size if all four values are present and
     // the saved rectangle still intersects at least one connected monitor.
@@ -444,7 +470,7 @@ fn setup_desktop_window(app: &mut tauri::App, initial_settings: &settings::Setti
             // costs nothing when the flag is already right, and means the
             // window is never left stuck behind the others.
             tauri::WindowEvent::Focused(true) => {
-                commands::apply_always_on_top(&app_for_focus);
+                commands::apply_always_on_top(&app_for_focus, "focus");
             }
             tauri::WindowEvent::Moved(pos) => {
                 if let Ok(conn) = db_for_pos.lock() {

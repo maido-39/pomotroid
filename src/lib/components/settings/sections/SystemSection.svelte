@@ -323,6 +323,15 @@
   {/if}
 
   {#if !useInAppNav}
+  <div class="group-heading">{m.system_group_startup()}</div>
+
+  <SettingsToggle
+    label={m.system_toggle_autostart()}
+    description={m.system_toggle_autostart_desc()}
+    checked={$settings.autostart_enabled}
+    onclick={() => toggle('autostart_enabled', $settings.autostart_enabled)}
+  />
+
   <div class="group-heading">{m.system_group_window()}</div>
 
   <SettingsToggle

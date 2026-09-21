@@ -185,7 +185,12 @@ pub fn settings_set_impl(app: &AppHandle, key: &str, value: &str) -> Result<Sett
     // break_always_on_top takes effect without waiting for a round transition.
     #[cfg(desktop)]
     if matches!(key, "always_on_top" | "break_always_on_top") {
-        apply_always_on_top(app);
+        apply_always_on_top(app, "setting-changed");
+    }
+
+    #[cfg(desktop)]
+    if key == "autostart_enabled" {
+        apply_autostart(app, new_settings.autostart_enabled);
     }
 
     // Sync tray countdown mode when the dial setting changes, then immediately
@@ -203,7 +208,7 @@ pub fn settings_set_impl(app: &AppHandle, key: &str, value: &str) -> Result<Sett
 
     // Update tray icon colors when the active theme changes.
     if matches!(key, "theme_mode" | "theme_light" | "theme_dark") {
-        let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        let data_dir = crate::paths::data_dir(app)?;
         let tray_theme_name = match new_settings.theme_mode.as_str() {
             "dark" => &new_settings.theme_dark,
             _ => &new_settings.theme_light,
@@ -330,7 +335,7 @@ pub fn settings_reset_impl(app: &AppHandle) -> Result<Settings, String> {
     // so destroy any active tray icon.
     tray::destroy_tray(&tray_state);
 
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = crate::paths::data_dir(app)?;
 
     // Clear custom alert sounds: delete files from disk and reset in-memory paths.
     if let Some(audio_state) = app.try_state::<Arc<AudioManager>>() {
@@ -378,7 +383,7 @@ pub fn settings_reset_defaults(app: AppHandle) -> Result<Settings, String> {
 // ---------------------------------------------------------------------------
 
 pub fn themes_list_impl(app: &AppHandle) -> Result<Vec<Theme>, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = crate::paths::data_dir(app)?;
     Ok(themes::list_all(&data_dir))
 }
 
@@ -487,20 +492,67 @@ pub fn stats_get_heatmap(app: AppHandle) -> Result<HeatmapStats, String> {
 // CMD-05 — Window commands
 // ---------------------------------------------------------------------------
 
+/// Register or unregister launch-at-login to match the setting.
+///
+/// The registration records the path of the running executable, so a portable
+/// copy registers itself where it currently sits — move the folder and the
+/// entry has to be switched off and on again.
+#[cfg(desktop)]
+pub fn apply_autostart(app: &AppHandle, enabled: bool) {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    // Unregistering something that was never registered reports "file not
+    // found", which on every normal start would look like a failure. Only
+    // touch the login item when it does not already match.
+    match manager.is_enabled() {
+        Ok(current) if current == enabled => {
+            log::debug!("[autostart] already {}", if enabled { "enabled" } else { "disabled" });
+            return;
+        }
+        Err(e) => log::debug!("[autostart] current state unknown ({e}), setting it anyway"),
+        _ => {}
+    }
+    let result = if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
+    match result {
+        Ok(()) => log::info!("[autostart] {}", if enabled { "enabled" } else { "disabled" }),
+        Err(e) => log::warn!("[autostart] failed to set to {enabled}: {e}"),
+    }
+}
+
+/// Apply the always-on-top flag, recording what asked for it.
+///
+/// This setting is reported as flaky and its value is not visible anywhere
+/// once applied, so every change is logged with the path that caused it:
+/// a log from a user showing `always-on-top=false (round-change)` with no
+/// matching `true` afterwards is the whole diagnosis.
+#[cfg(desktop)]
+pub fn set_always_on_top(app: &AppHandle, wanted: bool, reason: &str) {
+    let Some(window) = app.get_webview_window("main") else {
+        log::warn!("[window] always-on-top={wanted} ({reason}) skipped: no main window");
+        return;
+    };
+    match window.set_always_on_top(wanted) {
+        Ok(()) => log::info!("[window] always-on-top={wanted} ({reason})"),
+        Err(e) => log::warn!("[window] always-on-top={wanted} ({reason}) failed: {e}"),
+    }
+}
+
 /// Reassert the always-on-top flag the current settings and round call for.
 ///
 /// Showing or focusing a window can leave it below other windows, so every
 /// path that restores the window calls this rather than assuming the flag
 /// survived. Safe to call when the timer state is not registered yet.
 #[cfg(desktop)]
-pub fn apply_always_on_top(app: &AppHandle) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
+pub fn apply_always_on_top(app: &AppHandle, reason: &str) {
     let Some(timer) = app.try_state::<TimerController>() else {
+        log::debug!("[window] always-on-top ({reason}) skipped: timer not ready");
         return;
     };
-    let _ = window.set_always_on_top(timer.wants_always_on_top());
+    set_always_on_top(app, timer.wants_always_on_top(), reason);
 }
 
 /// Show or hide the main window.
@@ -514,7 +566,7 @@ pub fn window_set_visibility(visible: bool, app: AppHandle) -> Result<(), String
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
         #[cfg(desktop)]
-        apply_always_on_top(&app);
+        apply_always_on_top(&app, "window-shown");
     } else {
         window.hide().map_err(|e| e.to_string())?;
     }
@@ -537,11 +589,7 @@ fn audio_manager(app: &AppHandle) -> Result<Arc<AudioManager>, String> {
 }
 
 fn audio_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("audio"))
+    Ok(crate::paths::data_dir(app)?.join("audio"))
 }
 
 fn file_display_name(name: &str, fallback: &str) -> String {
@@ -765,7 +813,7 @@ pub fn audio_presets() -> Vec<&'static str> {
 
 fn background_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(background::dir(
-        &app.path().app_data_dir().map_err(|e| e.to_string())?,
+        &crate::paths::data_dir(app)?,
     ))
 }
 
@@ -919,7 +967,7 @@ pub fn notification_show(title: String, body: String, app: AppHandle) {
 /// Open the application log directory in the OS file manager.
 #[tauri::command]
 pub fn open_log_dir(app: AppHandle) {
-    match app.path().app_log_dir() {
+    match crate::paths::log_dir(&app) {
         Ok(log_dir) => {
             if let Err(e) = tauri_plugin_opener::open_path(&log_dir, None::<&str>) {
                 log::warn!("[log] failed to open log dir {}: {e}", log_dir.display());
@@ -980,12 +1028,11 @@ pub fn tray_supported() -> bool {
 /// Return the application log directory path as a string.
 #[tauri::command]
 pub fn get_log_dir(app: AppHandle) -> Result<String, String> {
-    app.path()
-        .app_log_dir()
+    crate::paths::log_dir(&app)
         .map(|p| p.to_string_lossy().into_owned())
         .map_err(|e| {
             log::warn!("[log] failed to resolve log dir: {e}");
-            e.to_string()
+            e
         })
 }
 

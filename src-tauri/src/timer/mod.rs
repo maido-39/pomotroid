@@ -395,9 +395,7 @@ fn listen_events(
                         let s = settings.lock().unwrap();
                         wants_always_on_top(&s, next_round)
                     };
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.set_always_on_top(wanted);
-                    }
+                    crate::commands::set_always_on_top(&app, wanted, "round-change");
                 }
 
                 // Update tray to reflect new round type and reset progress.
@@ -499,9 +497,7 @@ fn listen_events(
                         let s = settings.lock().unwrap();
                         wants_always_on_top(&s, round)
                     };
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.set_always_on_top(wanted);
-                    }
+                    crate::commands::set_always_on_top(&app, wanted, "reset");
                 }
                 if let Some(ws) = app.try_state::<Arc<WsState>>() {
                     websocket::broadcast_reset(&ws, snapshot.clone());
