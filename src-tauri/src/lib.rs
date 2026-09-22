@@ -36,7 +36,7 @@ use commands::{
     stats_get_detailed, stats_get_heatmap,
     themes_list,
     timer_get_state, timer_reset, timer_restart_round, timer_skip, timer_toggle,
-    websocket_pairing_info, websocket_regenerate_token,
+    websocket_interfaces, websocket_pairing_info, websocket_regenerate_token,
     window_set_visibility,
 };
 
@@ -150,6 +150,45 @@ pub fn run() {
                 let conn = db.lock().unwrap();
                 settings::load(&conn).expect("failed to load settings")
             };
+
+            // --- Main window ---
+            //
+            // Built here rather than declared in tauri.conf.json because a
+            // see-through window has to be created transparent, and a
+            // transparent window on Windows cannot keep the native frame.
+            // Both cost something even when the window is fully opaque, so a
+            // window nobody asked to be see-through is built the plain way.
+            // Changing the setting across that line therefore needs a restart.
+            #[cfg(desktop)]
+            {
+                let translucent = initial_settings.window_opacity < 100;
+                let mut builder = tauri::WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    tauri::WebviewUrl::default(),
+                )
+                .title("Pomotroid")
+                .inner_size(360.0, 478.0)
+                .min_inner_size(240.0, 240.0)
+                .resizable(true)
+                .visible(false)
+                .transparent(translucent)
+                .decorations(!translucent);
+                if !translucent {
+                    builder = builder.background_color(tauri::window::Color(0x2F, 0x38, 0x4B, 0xFF));
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    builder = builder
+                        .title_bar_style(tauri::TitleBarStyle::Overlay)
+                        .hidden_title(true);
+                }
+                builder.build().expect("failed to create main window");
+                log::info!(
+                    "[window] created {}",
+                    if translucent { "transparent (see-through enabled)" } else { "opaque" }
+                );
+            }
 
             // Apply the persisted log level before any further setup.
             if initial_settings.verbose_logging {
@@ -289,6 +328,7 @@ pub fn run() {
             install_update,
             // Pairing / remote
             websocket_pairing_info,
+            websocket_interfaces,
             websocket_regenerate_token,
             remote_connect,
             remote_disconnect,
@@ -440,9 +480,41 @@ fn setup_desktop_window(app: &mut tauri::App, initial_settings: &settings::Setti
     let db_for_close = db.clone();
     let win_for_close = main_window.clone();
     let app_for_close = app.handle().clone();
-    let db_for_pos = db.clone();
     let win_for_pos = main_window.clone();
     let app_for_focus = app.handle().clone();
+
+    // Latest window geometry, flushed to the database off the event thread.
+    #[derive(Default)]
+    struct PendingGeometry {
+        position: Option<(i32, i32)>,
+        size: Option<(u32, u32)>,
+        dirty: bool,
+    }
+    let pending_geometry = Arc::new(std::sync::Mutex::new(PendingGeometry::default()));
+    {
+        let pending = Arc::clone(&pending_geometry);
+        let db_for_pos = db.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let snapshot = {
+                let Ok(mut g) = pending.lock() else { continue };
+                if !g.dirty {
+                    continue;
+                }
+                g.dirty = false;
+                (g.position, g.size)
+            };
+            let Ok(conn) = db_for_pos.lock() else { continue };
+            if let Some((x, y)) = snapshot.0 {
+                let _ = settings::save_setting(&conn, "window_x", &x.to_string());
+                let _ = settings::save_setting(&conn, "window_y", &y.to_string());
+            }
+            if let Some((w, h)) = snapshot.1 {
+                let _ = settings::save_setting(&conn, "window_width", &w.to_string());
+                let _ = settings::save_setting(&conn, "window_height", &h.to_string());
+            }
+        });
+    }
     main_window.on_window_event(move |event| {
         match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -472,22 +544,24 @@ fn setup_desktop_window(app: &mut tauri::App, initial_settings: &settings::Setti
             tauri::WindowEvent::Focused(true) => {
                 commands::apply_always_on_top(&app_for_focus, "focus");
             }
+            // Dragging and resizing fire these continuously. Writing to the
+            // database on every event put dozens of SQLite transactions a
+            // second in the middle of a drag; record the latest geometry and
+            // let the flush thread persist it once the window settles.
             tauri::WindowEvent::Moved(pos) => {
-                if let Ok(conn) = db_for_pos.lock() {
-                    let _ = settings::save_setting(&conn, "window_x", &pos.x.to_string());
-                    let _ = settings::save_setting(&conn, "window_y", &pos.y.to_string());
+                if let Ok(mut g) = pending_geometry.lock() {
+                    g.position = Some((pos.x, pos.y));
+                    g.dirty = true;
                 }
             }
             tauri::WindowEvent::Resized(size) => {
-                if let Ok(conn) = db_for_pos.lock() {
-                    let _ = settings::save_setting(&conn, "window_width", &size.width.to_string());
-                    let _ = settings::save_setting(&conn, "window_height", &size.height.to_string());
-                    // Also capture position, since some window managers shift the
-                    // window origin when resizing.
+                if let Ok(mut g) = pending_geometry.lock() {
+                    g.size = Some((size.width, size.height));
+                    // Some window managers shift the origin when resizing.
                     if let Ok(pos) = win_for_pos.outer_position() {
-                        let _ = settings::save_setting(&conn, "window_x", &pos.x.to_string());
-                        let _ = settings::save_setting(&conn, "window_y", &pos.y.to_string());
+                        g.position = Some((pos.x, pos.y));
                     }
+                    g.dirty = true;
                 }
             }
             _ => {}

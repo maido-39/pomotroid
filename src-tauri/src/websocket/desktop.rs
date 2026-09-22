@@ -738,6 +738,13 @@ pub fn pairing_info(app: &AppHandle) -> Result<PairingInfo, String> {
     if hosts.is_empty() {
         hosts.push("127.0.0.1".into());
     }
+    if !prefer_host(&mut hosts, &settings.websocket_host) {
+        log::warn!(
+            "[ws] chosen pairing address {} is not on any adapter right now; using {}",
+            settings.websocket_host.trim(),
+            hosts[0]
+        );
+    }
     let clients = app
         .try_state::<Arc<WsState>>()
         .map(|s| s.client_count().0)
@@ -754,6 +761,65 @@ pub fn pairing_info(app: &AppHandle) -> Result<PairingInfo, String> {
         lan_enabled: settings.websocket_lan_enabled,
         clients,
     })
+}
+
+/// Move the chosen pairing address to the front of `hosts`.
+///
+/// Returns false only when an address was chosen but is not currently on any
+/// adapter — unplugged cable, VPN down — in which case the automatic pick
+/// stands. An empty choice means "decide automatically" and succeeds.
+///
+/// Which address leads matters: it is the one written into the QR code, and
+/// on a machine carrying VM, VPN and Docker adapters the automatic probe
+/// regularly leads with one the phone cannot reach.
+fn prefer_host(hosts: &mut [String], chosen: &str) -> bool {
+    let chosen = chosen.trim();
+    if chosen.is_empty() {
+        return true;
+    }
+    match hosts.iter().position(|h| h == chosen) {
+        Some(pos) => {
+            hosts.swap(0, pos);
+            true
+        }
+        None => false,
+    }
+}
+
+/// One usable IPv4 address per network adapter, newest-looking first.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NetworkInterface {
+    /// Adapter name as the OS reports it ("Wi-Fi", "eth0", ...).
+    pub name: String,
+    pub address: String,
+}
+
+/// Every adapter carrying a usable IPv4 address.
+///
+/// The automatic probe below can only report *an* address; it cannot say
+/// which adapter it belongs to, which is what makes choosing one possible.
+pub fn network_interfaces() -> Vec<NetworkInterface> {
+    let mut out: Vec<NetworkInterface> = Vec::new();
+    let Ok(addrs) = if_addrs::get_if_addrs() else {
+        return out;
+    };
+    for iface in addrs {
+        if iface.is_loopback() {
+            continue;
+        }
+        let std::net::IpAddr::V4(v4) = iface.ip() else {
+            continue;
+        };
+        if v4.is_unspecified() || v4.is_link_local() {
+            continue;
+        }
+        let address = v4.to_string();
+        if out.iter().any(|i| i.address == address) {
+            continue;
+        }
+        out.push(NetworkInterface { name: iface.name.clone(), address });
+    }
+    out
 }
 
 /// Best-effort discovery of this machine's LAN IPv4 address using the
@@ -777,7 +843,70 @@ pub fn local_ipv4_addresses() -> Vec<String> {
             }
         }
     }
+    // The probe only reports addresses that carry a route, so add the rest of
+    // the adapters behind them: one of those may be the chosen one.
+    for iface in network_interfaces() {
+        if !out.contains(&iface.address) {
+            out.push(iface.address);
+        }
+    }
     out
+}
+
+#[cfg(test)]
+mod interface_tests {
+    use super::*;
+
+    #[test]
+    fn interfaces_are_routable_and_named() {
+        // Runs against the real machine: the list must only offer addresses a
+        // phone could actually be given, so the noise that makes the automatic
+        // pick unreliable — loopback, and the 169.254 addresses that VPN,
+        // Bluetooth and disconnected adapters carry — is filtered out, and
+        // each entry can be told apart by its adapter name.
+        for iface in network_interfaces() {
+            assert!(!iface.name.is_empty(), "adapter has no name: {iface:?}");
+            let ip: std::net::Ipv4Addr = iface
+                .address
+                .parse()
+                .unwrap_or_else(|_| panic!("not an IPv4 address: {iface:?}"));
+            assert!(!ip.is_loopback(), "loopback offered for pairing: {iface:?}");
+            assert!(!ip.is_link_local(), "link-local offered for pairing: {iface:?}");
+            assert!(!ip.is_unspecified(), "unspecified address offered: {iface:?}");
+        }
+    }
+
+    #[test]
+    fn chosen_address_leads_the_list() {
+        let mut hosts = vec!["10.8.0.9".to_string(), "192.168.0.100".to_string()];
+        assert!(prefer_host(&mut hosts, "192.168.0.100"));
+        assert_eq!(hosts[0], "192.168.0.100", "the QR code follows hosts[0]");
+
+        // Empty means automatic: the probe's order is left alone.
+        let mut hosts = vec!["10.8.0.9".to_string(), "192.168.0.100".to_string()];
+        assert!(prefer_host(&mut hosts, "   "));
+        assert_eq!(hosts[0], "10.8.0.9");
+
+        // A chosen adapter that is gone falls back rather than breaking pairing.
+        let mut hosts = vec!["10.8.0.9".to_string()];
+        assert!(!prefer_host(&mut hosts, "192.168.0.100"));
+        assert_eq!(hosts[0], "10.8.0.9");
+    }
+
+    #[test]
+    fn every_interface_address_is_a_pairing_candidate() {
+        // `pairing_info` looks the chosen address up in `local_ipv4_addresses`,
+        // so an adapter that can be picked in settings has to appear there or
+        // the choice would silently fall back to the automatic one.
+        let candidates = local_ipv4_addresses();
+        for iface in network_interfaces() {
+            assert!(
+                candidates.contains(&iface.address),
+                "{} is offered but not a pairing candidate",
+                iface.address
+            );
+        }
+    }
 }
 
 /// 32-hex-character pairing token from the process-seeded hasher (no extra crate).

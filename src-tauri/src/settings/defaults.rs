@@ -43,6 +43,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("local_shortcut_fullscreen", "F11"),
     ("websocket_lan_enabled", "false"),
     ("websocket_token", ""),
+    ("websocket_host", ""),
     ("sound_work_alert", "default"),
     ("sound_short_break_alert", "default"),
     ("sound_long_break_alert", "default"),

@@ -118,7 +118,7 @@ be able to use it.
 
 SQLite key/value table. DB column names differ from Rust struct field names (e.g., DB key `work_rounds` → struct field `long_break_interval`). Mappings are in `src-tauri/src/settings/mod.rs`. New settings need a DB key mapping, a default value in `settings/defaults.rs`, and a corresponding `settings_set` key handler.
 
-Schema migrations are in `src-tauri/src/db/migrations.rs`. Add a new `MIGRATION_N` constant and increment the schema version check in `run()`. The current schema version is **10**.
+Schema migrations are in `src-tauri/src/db/migrations.rs`. Add a new `MIGRATION_N` constant and increment the schema version check in `run()`. The current schema version is **11**.
 
 ### Timer engine
 

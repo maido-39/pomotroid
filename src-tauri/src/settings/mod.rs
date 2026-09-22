@@ -56,6 +56,9 @@ pub struct Settings {
     /// Pairing token required for control/settings access over the WebSocket
     /// server. Empty until LAN access is first enabled.
     pub websocket_token: String,
+    /// LAN address to advertise for pairing. Empty picks one automatically,
+    /// which on a machine with several adapters can land on the wrong one.
+    pub websocket_host: String,
     /// Preset id (or "default") per alert cue. Custom files take precedence.
     pub sound_work_alert: String,
     pub sound_short_break_alert: String,
@@ -147,6 +150,7 @@ impl Default for Settings {
             websocket_port: 1314,
             websocket_lan_enabled: false,
             websocket_token: String::new(),
+            websocket_host: String::new(),
             sound_work_alert: "default".to_string(),
             sound_short_break_alert: "default".to_string(),
             sound_long_break_alert: "default".to_string(),
@@ -288,6 +292,7 @@ pub fn load(conn: &Connection) -> Result<Settings> {
         websocket_port: parse_u32(&map, "websocket_port", d.websocket_port as u32) as u16,
         websocket_lan_enabled: parse_bool(&map, "websocket_lan_enabled", d.websocket_lan_enabled),
         websocket_token: map.get("websocket_token").cloned().unwrap_or(d.websocket_token),
+        websocket_host: map.get("websocket_host").cloned().unwrap_or(d.websocket_host),
         sound_work_alert: map.get("sound_work_alert").cloned().unwrap_or(d.sound_work_alert),
         sound_short_break_alert: map.get("sound_short_break_alert").cloned().unwrap_or(d.sound_short_break_alert),
         sound_long_break_alert: map.get("sound_long_break_alert").cloned().unwrap_or(d.sound_long_break_alert),

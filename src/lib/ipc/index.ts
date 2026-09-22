@@ -147,6 +147,10 @@ export const installUpdate = () => invoke<void>('install_update');
 /** LAN address, port and pairing token of this desktop (QR code content). */
 export const websocketPairingInfo = () => invoke<PairingInfo>('websocket_pairing_info');
 
+/** Network adapters with an IPv4 address, for choosing the pairing address. */
+export const websocketInterfaces = () =>
+  invoke<{ name: string; address: string }[]>('websocket_interfaces');
+
 /** Mint a new pairing token; paired phones must re-pair. */
 export const websocketRegenerateToken = () => invoke<Settings>('websocket_regenerate_token');
 

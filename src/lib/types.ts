@@ -45,6 +45,7 @@ export interface Settings {
   websocket_port: number;
   websocket_lan_enabled: boolean;
   websocket_token: string;
+  websocket_host: string; // '' = pick automatically
   sound_work_alert: string; // 'default' | preset id
   sound_short_break_alert: string;
   sound_long_break_alert: string;

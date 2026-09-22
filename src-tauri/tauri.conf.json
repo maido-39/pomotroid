@@ -10,21 +10,7 @@
     "frontendDist": "../build"
   },
   "app": {
-    "windows": [
-      {
-        "title": "Pomotroid",
-        "width": 360,
-        "height": 478,
-        "minWidth": 240,
-        "minHeight": 240,
-        "resizable": true,
-        "decorations": false,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true,
-        "visible": false,
-        "transparent": true
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; img-src 'self' data:"
     }

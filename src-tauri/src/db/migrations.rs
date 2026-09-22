@@ -131,6 +131,12 @@ const MIGRATION_10: &str = "
     INSERT INTO schema_version VALUES (10);
 ";
 
+/// Seeds the pairing address setting. Empty keeps the automatic pick.
+const MIGRATION_11: &str = "
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('websocket_host', '');
+    INSERT INTO schema_version VALUES (11);
+";
+
 /// Apply any pending migrations. Each migration is wrapped in a transaction
 /// so a partial failure leaves the database unchanged.
 pub fn run(conn: &Connection) -> Result<()> {
@@ -196,6 +202,12 @@ pub fn run(conn: &Connection) -> Result<()> {
         log::info!("[db/migrations] MIGRATION_10 complete");
     }
 
+    if version < 11 {
+        log::info!("[db/migrations] applying MIGRATION_11: seed pairing address setting");
+        conn.execute_batch(&format!("BEGIN; {MIGRATION_11} COMMIT;"))?;
+        log::info!("[db/migrations] MIGRATION_11 complete");
+    }
+
     Ok(())
 }
 
@@ -231,7 +243,7 @@ mod tests {
         let v: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 10);
+        assert_eq!(v, 11);
     }
 
     #[test]

@@ -21,6 +21,7 @@
   import SettingsSlider from '$lib/components/settings/SettingsSlider.svelte';
   import BackgroundFraming from '$lib/components/settings/BackgroundFraming.svelte';
   import { FRAMING_DEFAULTS } from '$lib/utils/backdrop';
+  import { debounce } from '$lib/utils/debounce';
   import { isMobile, isWindows } from '$lib/utils/platform';
   import { readPickedFileAsBase64 } from '$lib/utils/files';
   import { error as logError, warn } from '$lib/utils/log';
@@ -94,20 +95,31 @@
     settings.set(updated);
   }
 
-  // Sliders: update the local mirror immediately, persist on every input event
-  // (the Rust side clamps and rebroadcasts settings:changed).
-  async function setBgValue(key: 'bg_image_opacity' | 'bg_image_blur' | 'bg_image_brightness', value: number) {
+  // Sliders: the mirror and the store follow the drag so the backdrop tracks
+  // it live, and the value reaches the database once the drag settles. Writing
+  // on every input event meant a SQLite write, a full settings reload and a
+  // `settings:changed` broadcast per pixel dragged.
+  const persistSetting = debounce(async (key: string, value: number) => {
+    try {
+      const updated = await setSetting(key, String(Math.round(value)));
+      settings.set(updated);
+    } catch (err) {
+      await logError(`[appearance] failed to save ${key}: ${err}`);
+    }
+  }, 150);
+
+  function setBgValue(key: 'bg_image_opacity' | 'bg_image_blur' | 'bg_image_brightness', value: number) {
     if (key === 'bg_image_opacity') bgOpacity = value;
     else if (key === 'bg_image_blur') bgBlur = value;
     else bgBrightness = value;
-    const updated = await setSetting(key, String(Math.round(value)));
-    settings.set(updated);
+    settings.set({ ...$settings, [key]: Math.round(value) });
+    persistSetting(key, value);
   }
 
-  async function setWindowOpacity(value: number) {
+  function setWindowOpacity(value: number) {
     windowOpacity = value;
-    const updated = await setSetting('window_opacity', String(Math.round(value)));
-    settings.set(updated);
+    settings.set({ ...$settings, window_opacity: Math.round(value) });
+    persistSetting('window_opacity', value);
   }
 
   // Framing: the gesture updates the store optimistically so the live backdrop

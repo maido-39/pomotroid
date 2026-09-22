@@ -68,6 +68,7 @@ export const installUpdate = b.installUpdate;
 
 // Pairing / remote
 export const websocketPairingInfo = b.websocketPairingInfo;
+export const websocketInterfaces = b.websocketInterfaces;
 export const websocketRegenerateToken = b.websocketRegenerateToken;
 export const remoteConnect = b.remoteConnect;
 export const remoteDisconnect = b.remoteDisconnect;

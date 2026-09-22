@@ -10,6 +10,7 @@
     websocketRegenerateToken,
     onWebsocketClients,
     onSettingsChanged,
+    websocketInterfaces,
   } from '$lib/backend';
   import type { PairingInfo } from '$lib/types';
   import QRCode from 'qrcode';
@@ -75,6 +76,7 @@
     const cleanups: (() => void)[] = [];
     (async () => {
       await refreshPairing();
+      await loadInterfaces();
       cleanups.push(await onWebsocketClients((c) => (clients = c.connected)));
       cleanups.push(await onSettingsChanged(refreshPairing));
     })();
@@ -149,6 +151,25 @@
       localPort = String($settings.websocket_port);
     }
   }
+
+  // Which adapter the pairing code should advertise. A machine with a VM, VPN
+  // or Docker adapter often has the automatic pick land on an address the
+  // phone cannot reach.
+  let interfaces = $state<{ name: string; address: string }[]>([]);
+
+  async function loadInterfaces() {
+    try {
+      interfaces = await websocketInterfaces();
+    } catch {
+      interfaces = [];
+    }
+  }
+
+  async function chooseHost(address: string) {
+    const updated = await setSetting('websocket_host', address);
+    settings.set(updated);
+    await refreshPairing();
+  }
 </script>
 
 <div class="section">
@@ -181,6 +202,23 @@
           </div>
         </div>
       </div>
+      {#if interfaces.length > 1}
+        <div class="adapter-row">
+          <label class="adapter-label" for="pair-adapter">{m.system_lan_adapter()}</label>
+          <select
+            id="pair-adapter"
+            class="adapter-select"
+            value={$settings.websocket_host}
+            onchange={(e) => chooseHost((e.currentTarget as HTMLSelectElement).value)}
+          >
+            <option value="">{m.system_lan_adapter_auto()}</option>
+            {#each interfaces as iface (iface.address)}
+              <option value={iface.address}>{iface.name} — {iface.address}</option>
+            {/each}
+          </select>
+        </div>
+        <p class="note">{m.system_lan_adapter_desc()}</p>
+      {/if}
       <p class="note">{m.system_lan_note()}</p>
     {/if}
   {/if}
@@ -508,6 +546,30 @@
 
   .btn-muted {
     color: var(--color-foreground-darker, var(--color-foreground));
+  }
+
+  .adapter-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 20px 2px;
+  }
+
+  .adapter-label {
+    font-size: 0.78rem;
+    color: var(--color-foreground);
+    white-space: nowrap;
+  }
+
+  .adapter-select {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.76rem;
+    padding: 4px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--color-separator);
+    background: var(--color-background);
+    color: var(--color-foreground);
   }
 
   .note {
