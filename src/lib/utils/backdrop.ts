@@ -96,3 +96,27 @@ export function frameBackground(
   if (!g) return { size: 'cover', position: '50% 50%' };
   return { size: `${g.w}px ${g.h}px`, position: `${g.x}px ${g.y}px` };
 }
+
+/**
+ * Turn the backend's `data:` URL into a blob URL.
+ *
+ * The stored image can be megabytes of base64, and that string must never sit
+ * in an inline style that changes: every slider step would re-serialise all of
+ * it into the style attribute, which is what made dragging a slider crawl once
+ * a background image was set. A blob URL is a few dozen characters.
+ *
+ * Decoded by hand rather than with `fetch(dataUrl)`, which the app's
+ * `default-src 'self'` CSP refuses.
+ *
+ * The caller owns the result and must `URL.revokeObjectURL` it.
+ */
+export function dataUrlToObjectUrl(dataUrl: string): string {
+  const comma = dataUrl.indexOf(',');
+  if (comma < 0) throw new Error('not a data URL');
+  const header = dataUrl.slice(0, comma);
+  const mime = header.slice(5, header.indexOf(';') === -1 ? undefined : header.indexOf(';'));
+  const binary = atob(dataUrl.slice(comma + 1));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: mime || 'image/png' }));
+}

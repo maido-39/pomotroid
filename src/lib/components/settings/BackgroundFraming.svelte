@@ -10,7 +10,7 @@
   // mirror (and the live backdrop) can follow the gesture, `oncommit` fires
   // once the gesture ends and is the one worth persisting.
 
-  import { clampPos, clampZoom, framingGeometry } from '$lib/utils/backdrop';
+  import { clampPos, clampZoom, dataUrlToObjectUrl, framingGeometry } from '$lib/utils/backdrop';
   import * as m from '$paraglide/messages.js';
 
   interface Props {
@@ -29,6 +29,9 @@
   let boxH = $state(0);
   let natural = $state({ w: 0, h: 0 });
   let dragging = $state(false);
+  // Same reason as the backdrop: the `data:` URL can be megabytes, and this
+  // element's style is rewritten on every frame of a drag.
+  let src = $state<string | null>(null);
 
   // Aspect ratio of the window the backdrop actually fills, so a phone shows
   // a tall preview and a desktop window a wide one.
@@ -42,15 +45,30 @@
 
   $effect(() => {
     const url = dataUrl;
-    if (!url) {
-      natural = { w: 0, h: 0 };
-      return;
+    let objectUrl: string | null = null;
+    let cancelled = false;
+    natural = { w: 0, h: 0 };
+    src = null;
+    if (url) {
+      (async () => {
+        try {
+          if (cancelled) return;
+          objectUrl = dataUrlToObjectUrl(url);
+          src = objectUrl;
+          const img = new Image();
+          img.onload = () => {
+            if (!cancelled) natural = { w: img.naturalWidth, h: img.naturalHeight };
+          };
+          img.src = objectUrl;
+        } catch {
+          // leave the preview empty; the backdrop reports the failure
+        }
+      })();
     }
-    const img = new Image();
-    img.onload = () => {
-      natural = { w: img.naturalWidth, h: img.naturalHeight };
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-    img.src = url;
   });
 
   // --- Gestures -----------------------------------------------------------
@@ -183,10 +201,10 @@
     {onwheel}
     {onkeydown}
   >
-    {#if geo}
+    {#if geo && src}
       <div
         class="image"
-        style="background-image: url({dataUrl}); background-size: {geo.w}px {geo.h}px; background-position: {geo.x}px {geo.y}px;"
+        style="background-image: url({src}); background-size: {geo.w}px {geo.h}px; background-position: {geo.x}px {geo.y}px;"
       ></div>
     {/if}
   </div>
