@@ -141,6 +141,14 @@ adds `tauri-plugin-fs` and `tauri-plugin-barcode-scanner`. Keep new
 dependencies in the right table — a crate in the shared table must compile for
 Android.
 
+`invoke_handler` in `lib.rs` lists every command once, for every platform, so a
+`#[tauri::command]` must exist everywhere. Put the `#[cfg]` on the *implementation*
+— give the mobile side of the module split a stub that returns nothing useful,
+the way `websocket::stub` answers `pairing_info` and `network_interfaces` — and
+never on the command itself. A `#[cfg(desktop)]` command compiles on the desktop
+and fails the Android build with `cannot find macro __cmd__<name>`, which nothing
+notices until the next APK.
+
 ### Capabilities / permissions
 
 `src-tauri/capabilities/default.json` (desktop, `platforms` restricted) and
