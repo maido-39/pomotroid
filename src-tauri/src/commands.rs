@@ -193,6 +193,13 @@ pub fn settings_set_impl(app: &AppHandle, key: &str, value: &str) -> Result<Sett
         apply_autostart(app, new_settings.autostart_enabled);
     }
 
+    // A new folder, or a new order through it, means a different picture. The
+    // directory is read here rather than on every switch.
+    if matches!(key, "bg_folder" | "bg_shuffle") {
+        reload_playlist(app, &new_settings);
+        app.emit("background:changed", ()).ok();
+    }
+
     // Sync tray countdown mode when the dial setting changes, then immediately
     // re-render the icon so it matches the dial without waiting for a timer event.
     if key == "dial_countdown" {
@@ -871,13 +878,14 @@ pub fn background_clear_impl(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Name, mime and raw bytes of the stored image (for the WebSocket server).
+/// Name, mime and raw bytes of the picture on screen (for the WebSocket
+/// server). Resolved the same way the local backdrop resolves it, so a paired
+/// phone follows the rotation rather than sitting on the stored image.
 pub fn background_raw_impl(app: &AppHandle) -> Result<Option<(String, &'static str, Vec<u8>)>, String> {
-    let dir = background_dir(app)?;
-    let Some((bytes, mime)) = background::read_bytes(&dir) else {
+    let Some(image) = current_background(app)? else {
         return Ok(None);
     };
-    Ok(Some((background_name(app, &dir)?, mime, bytes)))
+    Ok(Some((image.name, image.mime, image.bytes)))
 }
 
 fn background_name(app: &AppHandle, dir: &std::path::Path) -> Result<String, String> {
@@ -895,21 +903,175 @@ fn background_name(app: &AppHandle, dir: &std::path::Path) -> Result<String, Str
     })
 }
 
-pub fn background_get_impl(app: &AppHandle) -> Result<Option<background::BackgroundInfo>, String> {
+/// One background image, resolved and read.
+struct CurrentImage {
+    /// What the framing is stored under.
+    key: String,
+    /// What to show the user.
+    name: String,
+    mime: &'static str,
+    bytes: Vec<u8>,
+}
+
+impl CurrentImage {
+    fn from_folder(path: &std::path::Path, bytes: Vec<u8>) -> Self {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        Self {
+            // The path, so framing follows the picture rather than its position
+            // in the folder. Move the folder and the framing resets, which is
+            // the price of reading pictures where they sit.
+            key: path.to_string_lossy().into_owned(),
+            name: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            mime: background::mime_for_extension(&ext),
+            bytes,
+        }
+    }
+}
+
+/// The picture on screen: the rotation's current one when a folder is set,
+/// otherwise the single stored image.
+fn current_background(app: &AppHandle) -> Result<Option<CurrentImage>, String> {
+    if let Some(image) = folder_background(app)? {
+        return Ok(Some(image));
+    }
     let dir = background_dir(app)?;
-    let Some(data_url) = background::read_data_url(&dir) else {
+    let Some((bytes, mime)) = background::read_bytes(&dir) else {
         return Ok(None);
     };
-    let key = background::STEM.to_string();
-    let f = framing_for(app, &key)?;
-    Ok(Some(background::BackgroundInfo {
+    Ok(Some(CurrentImage {
+        key: background::STEM.to_string(),
         name: background_name(app, &dir)?,
-        data_url,
-        key,
+        mime,
+        bytes,
+    }))
+}
+
+/// The rotation's current picture, if a folder is loaded and readable.
+fn folder_background(app: &AppHandle) -> Result<Option<CurrentImage>, String> {
+    let Some(state) = app.try_state::<background::playlist::PlaylistState>() else {
+        return Ok(None);
+    };
+    // Two attempts: a picture can be deleted or renamed between the listing and
+    // now, and re-reading the folder is a better answer than showing nothing.
+    for attempt in 0..2 {
+        let path = { state.lock().map_err(|e| e.to_string())?.current() };
+        let Some(path) = path else { return Ok(None) };
+        match std::fs::read(&path) {
+            Ok(bytes) => return Ok(Some(CurrentImage::from_folder(&path, bytes))),
+            Err(e) if attempt == 0 => {
+                log::warn!(
+                    "[background] {} could not be read ({e}); re-reading the folder",
+                    path.display()
+                );
+                state.lock().map_err(|e| e.to_string())?.refresh();
+            }
+            Err(e) => {
+                log::warn!("[background] folder image still unreadable: {e}");
+                return Ok(None);
+            }
+        }
+    }
+    Ok(None)
+}
+
+pub fn background_get_impl(app: &AppHandle) -> Result<Option<background::BackgroundInfo>, String> {
+    let Some(image) = current_background(app)? else {
+        return Ok(None);
+    };
+    use base64::Engine;
+    let f = framing_for(app, &image.key)?;
+    let data = base64::engine::general_purpose::STANDARD.encode(&image.bytes);
+    Ok(Some(background::BackgroundInfo {
+        name: image.name,
+        data_url: format!("data:{};base64,{data}", image.mime),
+        key: image.key,
         pos_x: f.pos_x,
         pos_y: f.pos_y,
         zoom: f.zoom,
     }))
+}
+
+/// Show the next picture in the folder. No folder, nothing to do.
+pub fn background_next_impl(app: &AppHandle) -> Result<(), String> {
+    let Some(state) = app.try_state::<background::playlist::PlaylistState>() else {
+        return Ok(());
+    };
+    let moved = { state.lock().map_err(|e| e.to_string())?.advance() };
+    let Some(path) = moved else { return Ok(()) };
+    log::debug!("[background] now showing {}", path.display());
+    app.emit("background:changed", ()).ok();
+    Ok(())
+}
+
+/// Start the clock-driven half of the rotation.
+///
+/// A thread of its own rather than a hook on the timer's tick: pictures should
+/// keep changing while the timer is idle, which is exactly when no ticks
+/// arrive. It wakes every fifteen seconds and asks the settings what to do, so
+/// changing the interval takes effect without a restart, and zero meaning
+/// "never" costs nothing.
+pub fn start_background_rotation(app: &AppHandle) {
+    const POLL: std::time::Duration = std::time::Duration::from_secs(15);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let mut since = std::time::Instant::now();
+        loop {
+            std::thread::sleep(POLL);
+            let mins = rotation_interval_mins(&app);
+            if mins == 0 {
+                // Turning the interval back on should wait a full interval,
+                // not fire immediately on whatever time has piled up.
+                since = std::time::Instant::now();
+                continue;
+            }
+            if since.elapsed() < std::time::Duration::from_secs(mins as u64 * 60) {
+                continue;
+            }
+            since = std::time::Instant::now();
+            if let Err(e) = background_next_impl(&app) {
+                log::warn!("[background] timed rotation failed: {e}");
+            }
+        }
+    });
+}
+
+/// The rotation interval in minutes, 0 when off. Reads the one key rather than
+/// the whole settings table: this runs every fifteen seconds forever.
+fn rotation_interval_mins(app: &AppHandle) -> u32 {
+    let Some(db) = app.try_state::<DbState>() else { return 0 };
+    let Ok(conn) = db.lock() else { return 0 };
+    settings::get_setting(&conn, "bg_rotate_mins")
+        .unwrap_or_default()
+        .parse()
+        .unwrap_or(0)
+}
+
+/// Point the rotation at what the settings now say, and show a picture from it.
+///
+/// Called whenever the folder or the order changes. Reading the directory is a
+/// disk hit, so it happens here rather than on every switch.
+pub fn reload_playlist(app: &AppHandle, settings: &Settings) {
+    let Some(state) = app.try_state::<background::playlist::PlaylistState>() else {
+        return;
+    };
+    let Ok(mut pl) = state.lock() else {
+        log::warn!("[background] playlist lock poisoned; rotation left alone");
+        return;
+    };
+    if settings.bg_folder.is_empty() {
+        pl.clear();
+        log::info!("[background] no folder; showing the stored image");
+    } else if pl.folder() == std::path::Path::new(&settings.bg_folder) {
+        // Same folder, different order.
+        pl.set_shuffle(settings.bg_shuffle);
+    } else {
+        let count = pl.load(std::path::Path::new(&settings.bg_folder), settings.bg_shuffle);
+        log::info!("[background] folder {} holds {count} image(s)", settings.bg_folder);
+    }
 }
 
 /// How `key` is framed — the stored framing, or automatic when it has none.
@@ -1009,6 +1171,19 @@ pub fn background_clear_custom(app: AppHandle) -> Result<(), String> {
         return r;
     }
     background_clear_impl(&app)
+}
+
+/// Show the next picture in the folder.
+///
+/// Forwarded when following a desktop: the folder is the desktop's, so the
+/// desktop is what has to move — and then every screen follows, which is what
+/// someone tapping the phone to change the picture means.
+#[tauri::command]
+pub fn background_next(app: AppHandle) -> Result<(), String> {
+    if let Some(r) = remote::forward::<()>(&app, json!({ "type": "nextBackground" })) {
+        return r;
+    }
+    background_next_impl(&app)
 }
 
 /// Current background image as a data URL, or `None` when no image is set.

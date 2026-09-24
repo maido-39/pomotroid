@@ -428,6 +428,8 @@ export const setCustomBackgroundBytes = (name: string, dataB64: string) =>
   payload<string>({ type: 'setBackground', name, data_b64: dataB64 });
 export const clearCustomBackground = () => ok({ type: 'clearBackground' });
 export const openImageFilePicker = async (): Promise<string | null> => null;
+export const openFolderPicker = async (): Promise<string | null> => null;
+export const nextBackground = () => ok({ type: 'nextBackground' });
 
 export const openLogDir = async () => {};
 export const getLogDir = async () => '';

@@ -82,6 +82,16 @@ pub struct Settings {
     pub bg_image_zoom: u32,
     /// Original file name of the chosen image ("" = none).
     pub bg_image_name: String,
+    /// Folder of images the backdrop cycles through, read where it sits.
+    /// Empty means the single stored image is used instead.
+    pub bg_folder: String,
+    /// Walk the folder in a shuffled order rather than by file name. Off is
+    /// for people who named their files so the order means something.
+    pub bg_shuffle: bool,
+    /// Change picture when the round changes.
+    pub bg_rotate_on_round: bool,
+    /// Change picture every N minutes regardless of the timer; 0 is off.
+    pub bg_rotate_mins: u32,
     pub language: String,
     pub verbose_logging: bool,
     pub check_for_updates: bool,
@@ -163,6 +173,10 @@ impl Default for Settings {
             bg_image_pos_y: 50,
             bg_image_zoom: 100,
             bg_image_name: String::new(),
+            bg_folder: String::new(),
+            bg_shuffle: true,
+            bg_rotate_on_round: true,
+            bg_rotate_mins: 0,
             language: "auto".to_string(),
             verbose_logging: false,
             check_for_updates: true,
@@ -305,6 +319,12 @@ pub fn load(conn: &Connection) -> Result<Settings> {
         bg_image_pos_y: parse_u32(&map, "bg_image_pos_y", d.bg_image_pos_y).min(100),
         bg_image_zoom: parse_u32(&map, "bg_image_zoom", d.bg_image_zoom).clamp(100, 300),
         bg_image_name: map.get("bg_image_name").cloned().unwrap_or(d.bg_image_name),
+        bg_folder: map.get("bg_folder").cloned().unwrap_or(d.bg_folder),
+        bg_shuffle: parse_bool(&map, "bg_shuffle", d.bg_shuffle),
+        bg_rotate_on_round: parse_bool(&map, "bg_rotate_on_round", d.bg_rotate_on_round),
+        // A day is already far past "a slideshow"; the cap keeps a typo from
+        // parking the rotation for a week.
+        bg_rotate_mins: parse_u32(&map, "bg_rotate_mins", d.bg_rotate_mins).min(1440),
         language: map.get("language").cloned().unwrap_or(d.language),
         verbose_logging: parse_bool(&map, "verbose_logging", d.verbose_logging),
         check_for_updates: parse_bool(&map, "check_for_updates", d.check_for_updates),
@@ -514,12 +534,15 @@ mod tests {
         let long: String = conn.query_row("SELECT value FROM settings WHERE key = 'time_long_break_secs'", [], |r| r.get(0)).unwrap();
         assert_eq!(long, "1200");
 
-        // Old keys must be gone.
+        // Old keys must be gone. Named rather than matched on `%_mins`: this
+        // is about the three duration keys MIGRATION_2 replaced, and a
+        // wildcard also catches later settings that are honestly in minutes.
         let old_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM settings WHERE key LIKE '%_mins'",
+            "SELECT COUNT(*) FROM settings
+             WHERE key IN ('time_work_mins', 'time_short_break_mins', 'time_long_break_mins')",
             [], |r| r.get(0),
         ).unwrap();
-        assert_eq!(old_count, 0, "old *_mins keys must be absent after MIGRATION_2");
+        assert_eq!(old_count, 0, "old duration keys must be absent after MIGRATION_2");
     }
 
     #[test]

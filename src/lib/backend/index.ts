@@ -50,6 +50,8 @@ export const setCustomBackgroundBytes = b.setCustomBackgroundBytes;
 export const clearCustomBackground = b.clearCustomBackground;
 export const setBackgroundFraming = b.setBackgroundFraming;
 export const resetBackgroundFraming = b.resetBackgroundFraming;
+export const nextBackground = b.nextBackground;
+export const openFolderPicker = b.openFolderPicker;
 export const openImageFilePicker = b.openImageFilePicker;
 
 // Diagnostics

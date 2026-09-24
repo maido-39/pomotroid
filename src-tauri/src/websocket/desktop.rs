@@ -59,6 +59,8 @@ pub trait Backend: Send + Sync {
     fn get_background(&self) -> Result<Option<BlobPayload>, String>;
     fn set_background(&self, name: &str, bytes: &[u8]) -> Result<String, String>;
     fn clear_background(&self) -> Result<(), String>;
+    /// Advance the folder rotation by one picture.
+    fn next_background(&self) -> Result<(), String>;
     fn get_audio(&self, cue: AudioCue) -> Result<AudioSource, String>;
     fn set_audio(&self, cue: AudioCue, name: &str, bytes: &[u8]) -> Result<String, String>;
     fn clear_audio(&self, cue: AudioCue) -> Result<(), String>;
@@ -137,6 +139,10 @@ impl Backend for AppBackend {
 
     fn clear_background(&self) -> Result<(), String> {
         commands::background_clear_impl(&self.app)
+    }
+
+    fn next_background(&self) -> Result<(), String> {
+        commands::background_next_impl(&self.app)
     }
 
     fn get_audio(&self, cue: AudioCue) -> Result<AudioSource, String> {
@@ -638,6 +644,10 @@ pub fn handle_client_message(text: &str, backend: &dyn Backend, ctx: &ConnCtx) -
                 backend.clear_background()?;
                 reply("ok", id, None)
             }
+            "nextBackground" => {
+                backend.next_background()?;
+                reply("ok", id, None)
+            }
             "getAudio" => {
                 let cue_key = str_field(&msg, "cue")?;
                 let cue = AudioCue::from_key(cue_key).ok_or_else(|| format!("unknown cue '{cue_key}'"))?;
@@ -998,6 +1008,10 @@ mod tests {
             self.calls.lock().unwrap().push(format!("bg:{name}:{}", bytes.len()));
             Ok(name.to_string())
         }
+        fn next_background(&self) -> Result<(), String> {
+            self.calls.lock().unwrap().push("bg:next".to_string());
+            Ok(())
+        }
         fn clear_background(&self) -> Result<(), String> {
             self.calls.lock().unwrap().push("bg:clear".into());
             Ok(())
@@ -1189,11 +1203,14 @@ mod tests {
         assert_eq!(v["type"], "ok");
         let v = parse(handle_client_message(r#"{"type":"clearBackground"}"#, &b, &c));
         assert_eq!(v["type"], "ok");
+        let v = parse(handle_client_message(r#"{"type":"nextBackground"}"#, &b, &c));
+        assert_eq!(v["type"], "ok");
         let v = parse(handle_client_message(r#"{"type":"getBackground"}"#, &b, &c));
         assert!(v["payload"].is_null());
 
         let calls = b.calls.lock().unwrap();
         assert!(calls.contains(&"audio:work_alert:a.wav:3".to_string()));
+        assert!(calls.contains(&"bg:next".to_string()), "a phone can advance the rotation");
         assert!(calls.contains(&"bg:bg.png:3".to_string()));
         assert!(calls.contains(&"bg:clear".to_string()));
     }

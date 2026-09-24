@@ -58,6 +58,10 @@ export interface Settings {
   bg_image_pos_y: number; // %, 0–100 of the overflow (50 = centred)
   bg_image_zoom: number; // %, 100–300 on top of "cover"
   bg_image_name: string; // '' = none
+  bg_folder: string; // '' = use the single stored image
+  bg_shuffle: boolean; // walk the folder shuffled rather than by file name
+  bg_rotate_on_round: boolean;
+  bg_rotate_mins: number; // 0 = no clock-driven rotation
   theme_mode: string; // 'auto' | 'light' | 'dark'
   theme_light: string;
   theme_dark: string;

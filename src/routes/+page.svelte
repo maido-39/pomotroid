@@ -4,7 +4,13 @@
   import Titlebar from '$lib/components/Titlebar.svelte';
   import Timer from '$lib/components/Timer.svelte';
   import Backdrop from '$lib/components/Backdrop.svelte';
-  import { getSettings, getThemes, onSettingsChanged, onThemesChanged } from '$lib/backend';
+  import {
+    getSettings,
+    getThemes,
+    nextBackground,
+    onSettingsChanged,
+    onThemesChanged,
+  } from '$lib/backend';
   import { settings } from '$lib/stores/settings';
   import { applyTheme } from '$lib/stores/theme';
   import { resolveThemeName } from '$lib/utils/theme';
@@ -20,6 +26,19 @@
   let localVolume = $state(1.0);
   let preMuteVolume = $state(0.5);
   let isFullscreen = $state(false);
+
+  // Changing the picture by hand. Only meaningful with a folder set, and only
+  // when the double-click was not aimed at a control — double-clicking the
+  // play button should start and stop the timer, not shuffle the backdrop.
+  async function nextPicture(event: MouseEvent) {
+    if (!$settings.bg_folder) return;
+    if ((event.target as HTMLElement | null)?.closest('button, input, select, a')) return;
+    try {
+      await nextBackground();
+    } catch (err) {
+      await logError(`[background] next picture failed: ${err}`);
+    }
+  }
 
   // Base window dimensions (natural/default size).
   const BASE_W = 360;
@@ -183,7 +202,11 @@
 <div class="app">
   <Backdrop />
   <Titlebar />
-  <main class:compact={isCompact}>
+  <!-- Double-click anywhere that is not a control to change the picture by
+       hand. `ondblclick` on the region rather than on the backdrop: the
+       backdrop is `pointer-events: none`, and the point is to be able to hit
+       it without aiming. -->
+  <main class:compact={isCompact} ondblclick={nextPicture}>
     <Timer {isCompact} {uiScale} />
   </main>
 </div>

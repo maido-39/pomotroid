@@ -5,6 +5,8 @@
 /// served to the webviews as a `data:` URL. Display parameters (opacity,
 /// blur, brightness, enabled) live in the settings table; only the file
 /// itself lives here.
+pub mod playlist;
+
 use std::path::{Path, PathBuf};
 
 use base64::Engine;

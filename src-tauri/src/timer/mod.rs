@@ -398,6 +398,15 @@ fn listen_events(
                     crate::commands::set_always_on_top(&app, wanted, "round-change");
                 }
 
+                // A new round, a new picture — when the settings ask for it.
+                // Reading the flag from the settings already held here costs
+                // nothing; the rotation itself no-ops without a folder.
+                if settings.lock().unwrap().bg_rotate_on_round {
+                    if let Err(e) = crate::commands::background_next_impl(&app) {
+                        log::warn!("[background] rotation on round change failed: {e}");
+                    }
+                }
+
                 // Update tray to reflect new round type and reset progress.
                 // Use -1.0 (same as initialisation and Reset) so the very
                 // first tick of the new round always passes the ≥1% threshold,

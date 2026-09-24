@@ -26,8 +26,8 @@ use commands::{
     check_update,
     install_update,
     audio_clear_custom, audio_get_custom_info, audio_presets, audio_preview, audio_set_custom, audio_set_custom_bytes,
-    background_clear_custom, background_get, background_reset_framing, background_set_custom,
-    background_set_custom_bytes, background_set_framing,
+    background_clear_custom, background_get, background_next, background_reset_framing,
+    background_set_custom, background_set_custom_bytes, background_set_framing,
     get_log_dir, open_log_dir,
     notification_show,
     remote_connect, remote_disconnect, remote_parse_pairing, remote_status,
@@ -231,6 +231,15 @@ pub fn run() {
             );
             app.manage(timer);
 
+            // --- Background folder rotation ---
+            // Managed even with no folder set, so the resolution path is the
+            // same either way: an empty rotation simply falls through to the
+            // single stored image.
+            let playlist: background::playlist::PlaylistState = Default::default();
+            app.manage(playlist);
+            commands::reload_playlist(app.handle(), &initial_settings);
+            commands::start_background_rotation(app.handle());
+
             // --- WebSocket server state (always managed; server only runs on desktop) ---
             let ws_state = websocket::WsState::new();
             ws_state.attach(app.handle());
@@ -318,6 +327,7 @@ pub fn run() {
             background_get,
             background_set_framing,
             background_reset_framing,
+            background_next,
             // Notifications
             notification_show,
             // Diagnostics

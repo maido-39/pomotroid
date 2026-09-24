@@ -106,6 +106,13 @@ export const setBackgroundFraming = (key: string, posX: number, posY: number, zo
 export const resetBackgroundFraming = (key: string) =>
   invoke<void>('background_reset_framing', { key });
 
+/** Show the next picture in the background folder. No folder, no effect. */
+export const nextBackground = () => invoke<void>('background_next');
+
+/** Open a native folder picker. Returns a path or null. */
+export const openFolderPicker = (): Promise<string | null> =>
+  dialogOpen({ directory: true, multiple: false }) as Promise<string | null>;
+
 /** Open a native file picker filtered to image formats. Returns a path or null. */
 export const openImageFilePicker = (): Promise<string | null> =>
   dialogOpen({

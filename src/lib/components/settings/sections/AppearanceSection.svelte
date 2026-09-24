@@ -16,6 +16,7 @@
     onBackgroundChanged,
     setBackgroundFraming,
     resetBackgroundFraming,
+    openFolderPicker,
   } from '$lib/backend';
   import { resolveThemeName } from '$lib/utils/theme';
   import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -38,6 +39,10 @@
   // its own framing.
   let bgKey = $state<string | null>(null);
   let frame = $state({ ...FRAMING_DEFAULTS });
+  // A folder, once chosen, is the source: the single stored image stays where
+  // it is and comes back when the folder is cleared.
+  const usingFolder = $derived($settings.bg_folder !== '');
+  let rotateMins = $state($settings.bg_rotate_mins);
   // Local mirrors so the sliders move instantly while the save round-trips.
   let bgOpacity = $state($settings.bg_image_opacity);
   let bgBlur = $state($settings.bg_image_blur);
@@ -48,6 +53,7 @@
     bgBlur = $settings.bg_image_blur;
     bgBrightness = $settings.bg_image_brightness;
     windowOpacity = $settings.window_opacity;
+    rotateMins = $settings.bg_rotate_mins;
   });
 
   async function refreshBackground() {
@@ -100,6 +106,54 @@
       await logError(`[background] clear failed: ${err}`);
       bgError = String(err);
     }
+  }
+
+  async function pickFolder() {
+    bgError = null;
+    let path: string | null = null;
+    try {
+      path = await openFolderPicker();
+    } catch (err) {
+      await logError(`[background] folder picker error: ${err}`);
+      return;
+    }
+    if (!path) return;
+    try {
+      const updated = await setSetting('bg_folder', path);
+      settings.set(updated);
+      if (!updated.bg_image_enabled) {
+        settings.set(await setSetting('bg_image_enabled', 'true'));
+      }
+      await refreshBackground();
+    } catch (err) {
+      await logError(`[background] folder set failed: ${err}`);
+      bgError = String(err);
+    }
+  }
+
+  async function clearFolder() {
+    bgError = null;
+    try {
+      settings.set(await setSetting('bg_folder', ''));
+      await refreshBackground();
+    } catch (err) {
+      await logError(`[background] folder clear failed: ${err}`);
+      bgError = String(err);
+    }
+  }
+
+  async function toggleSetting(key: string, current: boolean) {
+    try {
+      settings.set(await setSetting(key, current ? 'false' : 'true'));
+    } catch (err) {
+      await logError(`[appearance] failed to toggle ${key}: ${err}`);
+    }
+  }
+
+  function setRotateMins(value: number) {
+    rotateMins = value;
+    settings.set({ ...$settings, bg_rotate_mins: Math.round(value) });
+    persistSetting('bg_rotate_mins', value);
   }
 
   async function toggleBackground() {
@@ -428,18 +482,56 @@
 
   <div class="bg-row">
     <div class="bg-meta">
-      <span class="bg-label">{m.appearance_group_background()}</span>
-      <span class="bg-file" class:custom={bgName !== null}>{bgName ?? m.appearance_bg_none()}</span>
+      <span class="bg-label">
+        {usingFolder ? m.appearance_bg_folder() : m.appearance_group_background()}
+      </span>
+      <span class="bg-file" class:custom={usingFolder || bgName !== null}>
+        {usingFolder ? $settings.bg_folder : (bgName ?? m.appearance_bg_none())}
+      </span>
+      {#if usingFolder}
+        <span class="bg-count">{m.appearance_bg_showing({ name: bgName ?? '' })}</span>
+      {/if}
     </div>
     <div class="bg-actions">
-      {#if bgName !== null}
+      {#if usingFolder}
+        <button class="btn-sm btn-restore" onclick={clearFolder}>{m.appearance_bg_folder_clear()}</button>
+      {:else if bgName !== null}
         <button class="btn-sm btn-restore" onclick={removeBackground}>{m.appearance_bg_remove()}</button>
       {/if}
-      <button class="btn-sm" onclick={pickBackground}>{m.appearance_bg_choose()}</button>
+      {#if !usingFolder}
+        <button class="btn-sm" onclick={pickBackground}>{m.appearance_bg_choose()}</button>
+      {/if}
+      {#if !isMobile}
+        <button class="btn-sm" onclick={pickFolder}>{m.appearance_bg_folder_choose()}</button>
+      {/if}
     </div>
   </div>
   {#if bgError}
     <p class="bg-error">{bgError}</p>
+  {/if}
+
+  {#if usingFolder}
+    <SettingsToggle
+      label={m.appearance_bg_shuffle()}
+      description={m.appearance_bg_shuffle_desc()}
+      checked={$settings.bg_shuffle}
+      onclick={() => toggleSetting('bg_shuffle', $settings.bg_shuffle)}
+    />
+    <SettingsToggle
+      label={m.appearance_bg_rotate_round()}
+      description={m.appearance_bg_rotate_round_desc()}
+      checked={$settings.bg_rotate_on_round}
+      onclick={() => toggleSetting('bg_rotate_on_round', $settings.bg_rotate_on_round)}
+    />
+    <SettingsSlider
+      label={m.appearance_bg_rotate_mins()}
+      value={rotateMins}
+      min={0}
+      max={120}
+      display={rotateMins === 0 ? m.appearance_bg_rotate_off() : `${Math.round(rotateMins)} min`}
+      oninput={setRotateMins}
+    />
+    <p class="bg-hint">{m.appearance_bg_rotate_mins_desc()}</p>
   {/if}
 
   <SettingsToggle
@@ -527,6 +619,15 @@
 
   .bg-file.custom {
     color: var(--color-accent);
+  }
+
+  .bg-count {
+    font-size: 0.68rem;
+    color: var(--color-foreground-darker, rgba(255, 255, 255, 0.35));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
   }
 
   .bg-actions {

@@ -164,6 +164,20 @@ const MIGRATION_12: &str = "
     INSERT INTO schema_version VALUES (12);
 ";
 
+/// Seeds the background folder rotation.
+///
+/// No folder, so an upgrade shows exactly the picture it showed before. The
+/// rotation defaults describe what someone who *does* pick a folder almost
+/// certainly wants: a shuffled order, a new picture when the round changes,
+/// and no clock-driven switching on top of it.
+const MIGRATION_13: &str = "
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('bg_folder', '');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('bg_shuffle', 'true');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('bg_rotate_on_round', 'true');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('bg_rotate_mins', '0');
+    INSERT INTO schema_version VALUES (13);
+";
+
 /// Apply any pending migrations. Each migration is wrapped in a transaction
 /// so a partial failure leaves the database unchanged.
 pub fn run(conn: &Connection) -> Result<()> {
@@ -241,6 +255,12 @@ pub fn run(conn: &Connection) -> Result<()> {
         log::info!("[db/migrations] MIGRATION_12 complete");
     }
 
+    if version < 13 {
+        log::info!("[db/migrations] applying MIGRATION_13: seed background folder rotation");
+        conn.execute_batch(&format!("BEGIN; {MIGRATION_13} COMMIT;"))?;
+        log::info!("[db/migrations] MIGRATION_13 complete");
+    }
+
     Ok(())
 }
 
@@ -276,7 +296,7 @@ mod tests {
         let v: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 12);
+        assert_eq!(v, 13);
     }
 
     #[test]
