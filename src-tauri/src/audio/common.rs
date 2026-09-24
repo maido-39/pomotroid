@@ -6,7 +6,7 @@
 ///   1. custom file in `{app_data_dir}/audio/custom_<cue>.<ext>`
 ///   2. bundled preset selected in settings (`sound_<cue>` = preset id)
 ///   3. embedded default asset
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::settings::Settings;
 
@@ -53,7 +53,6 @@ pub const STEM_WORK: &str = "custom_work_alert";
 pub const STEM_SHORT: &str = "custom_short_break_alert";
 pub const STEM_LONG: &str = "custom_long_break_alert";
 pub const STEM_TICK: &str = "custom_tick";
-pub const ALL_STEMS: &[&str] = &[STEM_WORK, STEM_SHORT, STEM_LONG, STEM_TICK];
 
 impl AudioCue {
     pub const ALL: [AudioCue; 4] = [
@@ -128,107 +127,35 @@ impl AudioCue {
 // Custom file bookkeeping
 // ---------------------------------------------------------------------------
 
-/// Paths to currently active custom audio files (one per cue).
-/// `None` means no custom file is set for that cue.
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct CustomAudioPaths {
-    pub work_alert: Option<PathBuf>,
-    pub short_break_alert: Option<PathBuf>,
-    pub long_break_alert: Option<PathBuf>,
-    pub tick: Option<PathBuf>,
-}
-
-impl CustomAudioPaths {
-    pub fn get(&self, cue: AudioCue) -> Option<&PathBuf> {
-        match cue {
-            AudioCue::WorkAlert => self.work_alert.as_ref(),
-            AudioCue::ShortBreakAlert => self.short_break_alert.as_ref(),
-            AudioCue::LongBreakAlert => self.long_break_alert.as_ref(),
-            AudioCue::Tick => self.tick.as_ref(),
-        }
-    }
-
-    pub fn set(&mut self, cue: AudioCue, path: Option<PathBuf>) {
-        match cue {
-            AudioCue::WorkAlert => self.work_alert = path,
-            AudioCue::ShortBreakAlert => self.short_break_alert = path,
-            AudioCue::LongBreakAlert => self.long_break_alert = path,
-            AudioCue::Tick => self.tick = path,
-        }
-    }
-
-    /// Display names (file names only) of the configured custom files.
-    pub fn info(&self) -> CustomAudioInfo {
-        let name = |p: Option<&PathBuf>| -> Option<String> {
-            p.and_then(|pb| pb.file_name())
-                .and_then(|n| n.to_str())
-                .map(String::from)
-        };
-        CustomAudioInfo {
-            work_alert: name(self.work_alert.as_ref()),
-            short_break_alert: name(self.short_break_alert.as_ref()),
-            long_break_alert: name(self.long_break_alert.as_ref()),
-            tick: name(self.tick.as_ref()),
-        }
-    }
-}
-
-/// Serialisable snapshot of custom audio file names (sent to the frontend).
+/// Serialisable snapshot of the custom sounds registered per cue, sent to the
+/// frontend. A list rather than one name: each cue holds a pool now, and one of
+/// them is chosen at random when the cue fires.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct CustomAudioInfo {
-    pub work_alert: Option<String>,
-    pub short_break_alert: Option<String>,
-    pub long_break_alert: Option<String>,
-    pub tick: Option<String>,
+    pub work_alert: Vec<String>,
+    pub short_break_alert: Vec<String>,
+    pub long_break_alert: Vec<String>,
+    pub tick: Vec<String>,
 }
 
 impl CustomAudioInfo {
-    pub fn get(&self, cue: AudioCue) -> Option<&String> {
+    pub fn get(&self, cue: AudioCue) -> &[String] {
         match cue {
-            AudioCue::WorkAlert => self.work_alert.as_ref(),
-            AudioCue::ShortBreakAlert => self.short_break_alert.as_ref(),
-            AudioCue::LongBreakAlert => self.long_break_alert.as_ref(),
-            AudioCue::Tick => self.tick.as_ref(),
+            AudioCue::WorkAlert => &self.work_alert,
+            AudioCue::ShortBreakAlert => &self.short_break_alert,
+            AudioCue::LongBreakAlert => &self.long_break_alert,
+            AudioCue::Tick => &self.tick,
         }
     }
 
-    pub fn set(&mut self, cue: AudioCue, name: Option<String>) {
+    pub fn set(&mut self, cue: AudioCue, names: Vec<String>) {
         match cue {
-            AudioCue::WorkAlert => self.work_alert = name,
-            AudioCue::ShortBreakAlert => self.short_break_alert = name,
-            AudioCue::LongBreakAlert => self.long_break_alert = name,
-            AudioCue::Tick => self.tick = name,
+            AudioCue::WorkAlert => self.work_alert = names,
+            AudioCue::ShortBreakAlert => self.short_break_alert = names,
+            AudioCue::LongBreakAlert => self.long_break_alert = names,
+            AudioCue::Tick => self.tick = names,
         }
     }
-}
-
-/// Scan `audio_dir` for any saved custom audio files and return the paths.
-pub fn find_custom_files(audio_dir: &Path) -> CustomAudioPaths {
-    let find = |stem: &str| -> Option<PathBuf> {
-        let entries = std::fs::read_dir(audio_dir).ok()?;
-        entries
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .find(|p| p.file_stem().and_then(|s| s.to_str()) == Some(stem))
-    };
-    CustomAudioPaths {
-        work_alert: find(STEM_WORK),
-        short_break_alert: find(STEM_SHORT),
-        long_break_alert: find(STEM_LONG),
-        tick: find(STEM_TICK),
-    }
-}
-
-/// Delete every file in `audio_dir` whose stem matches `stem`.
-pub fn remove_custom_files(audio_dir: &Path, stem: &str) -> std::io::Result<()> {
-    if let Ok(entries) = std::fs::read_dir(audio_dir) {
-        for entry in entries.filter_map(|e| e.ok()) {
-            let p = entry.path();
-            if p.file_stem().and_then(|s| s.to_str()) == Some(stem) {
-                std::fs::remove_file(&p)?;
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Sanitised extension for a user-supplied file name (lowercase, alnum only,
@@ -399,21 +326,4 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn find_and_remove_custom_files() {
-        let dir = std::env::temp_dir().join(format!("pomotroid-audio-find-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("custom_work_alert.mp3"), b"x").unwrap();
-        std::fs::write(dir.join("custom_tick.ogg"), b"x").unwrap();
-
-        let found = find_custom_files(&dir);
-        assert!(found.work_alert.is_some());
-        assert!(found.short_break_alert.is_none());
-        assert!(found.tick.is_some());
-        assert_eq!(found.info().tick.as_deref(), Some("custom_tick.ogg"));
-
-        remove_custom_files(&dir, STEM_TICK).unwrap();
-        assert!(find_custom_files(&dir).tick.is_none());
-        std::fs::remove_dir_all(&dir).ok();
-    }
 }

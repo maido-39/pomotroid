@@ -7,6 +7,7 @@ pub mod notifications;
 pub mod paths;
 pub mod remote;
 pub mod settings;
+pub mod shuffle;
 pub mod shortcuts;
 pub mod themes;
 pub mod timer;
@@ -25,7 +26,8 @@ use commands::{
     app_version,
     check_update,
     install_update,
-    audio_clear_custom, audio_get_custom_info, audio_presets, audio_preview, audio_set_custom, audio_set_custom_bytes,
+    audio_clear_custom, audio_get_custom_info, audio_presets, audio_preview, audio_remove_custom,
+    audio_set_custom, audio_set_custom_bytes,
     background_clear_custom, background_get, background_next, background_reset_framing,
     background_set_custom, background_set_custom_bytes, background_set_framing,
     get_log_dir, open_log_dir,
@@ -211,12 +213,10 @@ pub fn run() {
 
             // --- Audio engine (optional — graceful if no audio device) ---
             if let Some(audio) = audio::AudioManager::new(&initial_settings) {
-                // Restore any previously saved custom audio files.
-                let audio_dir = app_data_dir.join("audio");
-                if audio_dir.exists() {
-                    let custom = audio::find_custom_files(&audio_dir);
-                    *audio.custom_paths.lock().unwrap() = custom;
-                }
+                // Point the sound pools at their directory. It need not exist
+                // yet: the pools are read when a cue fires, so one created
+                // later by adding a sound is picked up without a restart.
+                audio.set_audio_dir(app_data_dir.join("audio"));
                 #[cfg(mobile)]
                 audio.attach(app.handle().clone());
                 app.manage(audio);
@@ -317,6 +317,7 @@ pub fn run() {
             audio_set_custom,
             audio_set_custom_bytes,
             audio_clear_custom,
+            audio_remove_custom,
             audio_get_custom_info,
             audio_preview,
             audio_presets,

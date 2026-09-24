@@ -11,8 +11,9 @@ use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Manager};
 
+use super::pool;
 use super::common::{
-    resolve_source, AudioCue, AudioSource, CustomAudioInfo, CustomAudioPaths, SoundSelection,
+    resolve_source, AudioCue, AudioSource, CustomAudioInfo, SoundSelection,
 };
 use crate::settings::Settings;
 
@@ -39,7 +40,7 @@ impl From<&Settings> for AudioSettings {
 
 pub struct AudioManager {
     settings: Mutex<AudioSettings>,
-    pub custom_paths: Arc<Mutex<CustomAudioPaths>>,
+    pub picker: Arc<Mutex<pool::Picker>>,
     app: Mutex<Option<AppHandle>>,
     /// cache key → file already written to the cache dir.
     written: Mutex<HashMap<String, PathBuf>>,
@@ -50,7 +51,7 @@ impl AudioManager {
         log::info!("[audio] mobile manager initialized: volume={:.0}%", initial.volume * 100.0);
         Some(Arc::new(Self {
             settings: Mutex::new(AudioSettings::from(initial)),
-            custom_paths: Arc::new(Mutex::new(CustomAudioPaths::default())),
+            picker: Arc::new(Mutex::new(pool::Picker::default())),
             app: Mutex::new(None),
             written: Mutex::new(HashMap::new()),
         }))
@@ -65,10 +66,16 @@ impl AudioManager {
         *self.settings.lock().unwrap() = AudioSettings::from(s);
     }
 
+    /// Resolve the bytes currently active for `cue` (pool then preset then
+    /// default).
+    ///
+    /// The pool is consulted at play time, so a sound added in Settings is in
+    /// play on the next round without anything being told about it, and which
+    /// of several sounds is used is decided here rather than stored.
     pub fn resolve(&self, cue: AudioCue) -> AudioSource {
-        let custom = self.custom_paths.lock().unwrap().get(cue).cloned();
+        let chosen = self.picker.lock().unwrap().choose(cue);
         let selection = self.settings.lock().unwrap().sounds.clone();
-        resolve_source(cue, custom.as_deref(), &selection)
+        resolve_source(cue, chosen.as_deref(), &selection)
     }
 
     pub fn play_cue(&self, cue: AudioCue) {
@@ -148,16 +155,24 @@ impl AudioManager {
         }
     }
 
-    pub fn set_custom_path(&self, cue: AudioCue, path: PathBuf) {
-        self.custom_paths.lock().unwrap().set(cue, Some(path));
+    /// Point the pools at the directory that holds them.
+    pub fn set_audio_dir(&self, dir: PathBuf) {
+        self.picker.lock().unwrap().set_audio_dir(dir);
     }
 
-    pub fn clear_custom_path(&self, cue: AudioCue) {
-        self.custom_paths.lock().unwrap().set(cue, None);
+    /// Tell the pools that `cue`'s sounds changed on disk.
+    pub fn pool_changed(&self, cue: AudioCue) {
+        self.picker.lock().unwrap().invalidate(cue);
     }
 
+    /// The sounds registered for each cue, as the user should see them.
     pub fn get_custom_info(&self) -> CustomAudioInfo {
-        self.custom_paths.lock().unwrap().info()
+        let picker = self.picker.lock().unwrap();
+        let mut info = CustomAudioInfo::default();
+        for cue in AudioCue::ALL {
+            info.set(cue, picker.names(cue));
+        }
+        info
     }
 }
 

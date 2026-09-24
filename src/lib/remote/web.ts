@@ -361,6 +361,8 @@ export const setCustomAudio = async (_cue: string, _srcPath: string): Promise<st
 export const setCustomAudioBytes = (cue: AudioCueKey, name: string, dataB64: string) =>
   payload<string>({ type: 'setAudio', cue, name, data_b64: dataB64 });
 export const clearCustomAudio = (cue: string) => ok({ type: 'clearAudio', cue });
+export const removeCustomAudio = (cue: string, name: string) =>
+  ok({ type: 'removeAudio', cue, name });
 export const audioPreview = async (cue: AudioCueKey) => {
   const url = await audioBlobUrl(cue);
   const el = new Audio(url);

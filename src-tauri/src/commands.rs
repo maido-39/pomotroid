@@ -344,14 +344,15 @@ pub fn settings_reset_impl(app: &AppHandle) -> Result<Settings, String> {
 
     let data_dir = crate::paths::data_dir(app)?;
 
-    // Clear custom alert sounds: delete files from disk and reset in-memory paths.
+    // Clear custom alert sounds: empty every pool and tell the manager to look
+    // again.
     if let Some(audio_state) = app.try_state::<Arc<AudioManager>>() {
         let audio_dir = data_dir.join("audio");
-        for stem in audio::ALL_STEMS {
-            let _ = audio::remove_custom_files(&audio_dir, stem);
-        }
         for cue in AudioCue::ALL {
-            audio_state.clear_custom_path(cue);
+            if let Err(e) = audio::pool::clear(&audio_dir, cue) {
+                log::warn!("[audio] failed to clear {} on settings reset: {e}", cue.key());
+            }
+            audio_state.pool_changed(cue);
         }
         audio_state.apply_settings(&new_settings);
         log::info!("[audio] custom sounds cleared on settings reset");
@@ -618,85 +619,71 @@ fn file_display_name(name: &str, fallback: &str) -> String {
         .to_string()
 }
 
-/// Shared tail of the custom-audio setters: the new file is already at
-/// `dest`; verify it decodes, activate it and persist its name.
-fn commit_custom_audio(
+/// Add a user-selected audio file to `cue`'s pool. Returns the stored name.
+pub fn audio_add_path_impl(app: &AppHandle, cue: AudioCue, src_path: &str) -> Result<String, String> {
+    let src = std::path::Path::new(src_path);
+    let bytes = std::fs::read(src).map_err(|e| format!("cannot read {src_path}: {e}"))?;
+    let name = file_display_name(src_path, "custom");
+    audio_add_bytes_impl(app, cue, &name, &bytes)
+}
+
+/// Add raw bytes to `cue`'s pool under `name`. Returns the stored name.
+///
+/// A file the player cannot decode is refused rather than left to end a round
+/// in silence. Because the pool is written before it can be probed, and writing
+/// may have replaced a sound of the same name, the bytes it replaced are put
+/// back when the probe fails.
+pub fn audio_add_bytes_impl(
     app: &AppHandle,
     cue: AudioCue,
-    dest: std::path::PathBuf,
-    display_name: String,
+    name: &str,
+    bytes: &[u8],
 ) -> Result<String, String> {
-    let audio_state = audio_manager(app)?;
-
-    // Verify the copied file is decodable before committing. If it fails,
-    // clean up the orphan and sync in-memory state to default (the old file
-    // was already deleted by the caller).
-    if let Err(e) = audio::probe_audio_file(&dest) {
-        let _ = std::fs::remove_file(&dest);
-        audio_state.clear_custom_path(cue);
-        return Err(e);
-    }
-
-    audio_state.set_custom_path(cue, dest);
-
-    // Persist the original filename so it survives restarts.
-    {
-        let db = app.state::<DbState>();
-        let conn = db.lock().map_err(|e| e.to_string())?;
-        settings::save_setting(&conn, cue.name_key(), &display_name).map_err(|e| e.to_string())?;
-    }
-
-    log::info!("[audio] custom sound set cue={} file={display_name}", cue.key());
-    app.emit("audio:changed", cue.key()).ok();
-    Ok(display_name)
-}
-
-/// Copy a user-selected audio file into the app config dir for the given cue slot.
-pub fn audio_set_path_impl(app: &AppHandle, cue: AudioCue, src_path: &str) -> Result<String, String> {
     let audio_dir = audio_dir(app)?;
-    std::fs::create_dir_all(&audio_dir).map_err(|e| e.to_string())?;
-
-    let src = std::path::Path::new(src_path);
-    let display_name = file_display_name(src_path, "custom");
-    let ext = audio::safe_extension(&display_name);
-
-    // Remove any existing custom file for this slot (preserves zero orphans).
-    audio::remove_custom_files(&audio_dir, cue.stem()).map_err(|e| e.to_string())?;
-
-    let dest = audio_dir.join(format!("{}.{ext}", cue.stem()));
-    std::fs::copy(src, &dest).map_err(|e| e.to_string())?;
-
-    commit_custom_audio(app, cue, dest, display_name)
-}
-
-/// Store raw bytes as the custom sound for `cue`.
-pub fn audio_set_bytes_impl(app: &AppHandle, cue: AudioCue, name: &str, bytes: &[u8]) -> Result<String, String> {
-    if bytes.is_empty() {
-        return Err("audio file is empty".into());
-    }
-    if bytes.len() > MAX_UPLOAD_BYTES {
-        return Err(format!("audio file is too large (max {} MB)", MAX_UPLOAD_BYTES / 1024 / 1024));
-    }
-    let audio_dir = audio_dir(app)?;
-    std::fs::create_dir_all(&audio_dir).map_err(|e| e.to_string())?;
     let display_name = file_display_name(name, "custom");
-    let ext = audio::safe_extension(&display_name);
+    let path = audio::pool::dir(&audio_dir, cue).join(audio::pool::stored_name(&display_name));
+    let replaced = std::fs::read(&path).ok();
 
-    audio::remove_custom_files(&audio_dir, cue.stem()).map_err(|e| e.to_string())?;
-    let dest = audio_dir.join(format!("{}.{ext}", cue.stem()));
-    std::fs::write(&dest, bytes).map_err(|e| e.to_string())?;
+    let stored = audio::pool::add_bytes(&audio_dir, cue, &display_name, bytes)?;
+    let path = audio::pool::dir(&audio_dir, cue).join(&stored);
 
-    commit_custom_audio(app, cue, dest, display_name)
+    if let Err(e) = audio::probe_audio_file(&path) {
+        match replaced {
+            Some(old) => {
+                let _ = std::fs::write(&path, old);
+                return Err(format!("{e} (the sound already there was kept)"));
+            }
+            None => {
+                let _ = std::fs::remove_file(&path);
+                return Err(e);
+            }
+        }
+    }
+
+    audio_manager(app)?.pool_changed(cue);
+    log::info!("[audio] sound added cue={} file={stored}", cue.key());
+    app.emit("audio:changed", cue.key()).ok();
+    Ok(stored)
 }
 
-/// Restore the preset/built-in sound for `cue` by deleting the custom file.
-pub fn audio_clear_impl(app: &AppHandle, cue: AudioCue) -> Result<(), String> {
-    let audio_state = audio_manager(app)?;
+/// Remove one sound from `cue`'s pool by the name the UI shows.
+pub fn audio_remove_impl(app: &AppHandle, cue: AudioCue, name: &str) -> Result<(), String> {
     let audio_dir = audio_dir(app)?;
-    audio::remove_custom_files(&audio_dir, cue.stem()).map_err(|e| e.to_string())?;
-    audio_state.clear_custom_path(cue);
+    audio::pool::remove(&audio_dir, cue, name)?;
+    audio_manager(app)?.pool_changed(cue);
+    log::info!("[audio] sound removed cue={} file={name}", cue.key());
+    app.emit("audio:changed", cue.key()).ok();
+    Ok(())
+}
 
-    // Remove the persisted display name.
+/// Empty `cue`'s pool, falling back to its preset or built-in sound.
+pub fn audio_clear_impl(app: &AppHandle, cue: AudioCue) -> Result<(), String> {
+    let audio_dir = audio_dir(app)?;
+    audio::pool::clear(&audio_dir, cue).map_err(|e| e.to_string())?;
+    audio_manager(app)?.pool_changed(cue);
+
+    // The display name older builds persisted has no meaning now that the names
+    // come from the files themselves.
     {
         let db = app.state::<DbState>();
         let conn = db.lock().map_err(|e| e.to_string())?;
@@ -704,27 +691,14 @@ pub fn audio_clear_impl(app: &AppHandle, cue: AudioCue) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
 
-    log::info!("[audio] custom sound cleared cue={}", cue.key());
+    log::info!("[audio] sounds cleared cue={}", cue.key());
     app.emit("audio:changed", cue.key()).ok();
     Ok(())
 }
 
-/// Display names of any configured custom audio files.
+/// The sounds registered for each cue, as the UI should list them.
 pub fn audio_info_impl(app: &AppHandle) -> Result<audio::CustomAudioInfo, String> {
-    let audio_state = audio_manager(app)?;
-    // Start from the AudioManager's paths (determines which slots are active),
-    // then override each active slot's name with the persisted original filename.
-    let mut info = audio_state.get_custom_info();
-    let db = app.state::<DbState>();
-    let conn = db.lock().map_err(|e| e.to_string())?;
-    for cue in AudioCue::ALL {
-        if info.get(cue).is_some() {
-            if let Some(name) = settings::get_setting(&conn, cue.name_key()) {
-                info.set(cue, Some(name));
-            }
-        }
-    }
-    Ok(info)
+    Ok(audio_manager(app)?.get_custom_info())
 }
 
 /// Bytes currently active for `cue` (custom → preset → default).
@@ -737,11 +711,11 @@ pub fn audio_resolve_impl(app: &AppHandle, cue: AudioCue) -> Result<AudioSource,
 /// `cue` must be one of: `"work_alert"`, `"short_break_alert"`, `"long_break_alert"`, `"tick"`.
 /// `src_path` is the full path to the file chosen by the user.
 ///
-/// The file is stored with a fixed stem (e.g. `custom_work_alert.mp3`) so that
-/// selecting a new file for the same slot automatically replaces the old one —
-/// no orphan files accumulate.
+/// The sound joins the cue's pool rather than replacing it: when a cue fires,
+/// one of its pool is chosen at random. Choosing the same file twice replaces
+/// that one entry.
 ///
-/// Returns the original filename for display in the UI.
+/// Returns the stored file name for display in the UI.
 #[tauri::command]
 pub fn audio_set_custom(cue: String, src_path: String, app: AppHandle) -> Result<String, String> {
     let cue = parse_cue(&cue)?;
@@ -750,7 +724,7 @@ pub fn audio_set_custom(cue: String, src_path: String, app: AppHandle) -> Result
         let bytes = std::fs::read(&src_path).map_err(|e| e.to_string())?;
         return audio_set_custom_bytes_inner(&app, cue, &file_display_name(&src_path, "custom"), &bytes);
     }
-    audio_set_path_impl(&app, cue, &src_path)
+    audio_add_path_impl(&app, cue, &src_path)
 }
 
 fn audio_set_custom_bytes_inner(app: &AppHandle, cue: AudioCue, name: &str, bytes: &[u8]) -> Result<String, String> {
@@ -766,7 +740,7 @@ fn audio_set_custom_bytes_inner(app: &AppHandle, cue: AudioCue, name: &str, byte
     ) {
         return r;
     }
-    audio_set_bytes_impl(app, cue, name, bytes)
+    audio_add_bytes_impl(app, cue, name, bytes)
 }
 
 /// Same as `audio_set_custom` but receives the file contents directly
@@ -787,7 +761,21 @@ pub fn audio_set_custom_bytes(
     audio_set_custom_bytes_inner(&app, cue, &name, &bytes)
 }
 
-/// Restore the preset/built-in sound for the given cue slot by deleting the custom file.
+/// Remove one sound from a cue's pool, by the name `audio_get_custom_info`
+/// reported.
+#[tauri::command]
+pub fn audio_remove_custom(cue: String, name: String, app: AppHandle) -> Result<(), String> {
+    let cue = parse_cue(&cue)?;
+    if let Some(r) = remote::forward::<()>(
+        &app,
+        json!({ "type": "removeAudio", "cue": cue.key(), "name": name }),
+    ) {
+        return r;
+    }
+    audio_remove_impl(&app, cue, &name)
+}
+
+/// Empty a cue's pool, restoring its preset or built-in sound.
 #[tauri::command]
 pub fn audio_clear_custom(cue: String, app: AppHandle) -> Result<(), String> {
     let cue = parse_cue(&cue)?;

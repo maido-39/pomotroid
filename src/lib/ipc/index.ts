@@ -67,6 +67,10 @@ export const setCustomAudioBytes = (cue: AudioCueKey, name: string, dataB64: str
 /** Delete the custom file for `cue` and revert to the preset/built-in sound. */
 export const clearCustomAudio = (cue: string) => invoke<void>('audio_clear_custom', { cue });
 
+/** Remove one sound from a cue's pool, by the name `getCustomAudioInfo` reported. */
+export const removeCustomAudio = (cue: string, name: string) =>
+  invoke<void>('audio_remove_custom', { cue, name });
+
 /** Play the currently active sound for `cue` once (audition in Settings). */
 export const audioPreview = (cue: AudioCueKey) => invoke<void>('audio_preview', { cue });
 

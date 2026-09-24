@@ -7,6 +7,7 @@
     setCustomAudio,
     setCustomAudioBytes,
     clearCustomAudio,
+    removeCustomAudio,
     openAudioFilePicker,
     audioPreview,
     audioPresets,
@@ -53,10 +54,10 @@
 
   let presets = $state<string[]>([]);
   let custom = $state<CustomAudioInfo>({
-    work_alert: null,
-    short_break_alert: null,
-    long_break_alert: null,
-    tick: null,
+    work_alert: [],
+    short_break_alert: [],
+    long_break_alert: [],
+    tick: [],
   });
   let errors = $state<Partial<Record<AudioCueKey, string>>>({});
   let openMenu = $state<AudioCueKey | null>(null);
@@ -72,8 +73,11 @@
   }
 
   function currentLabel(id: AudioCueKey): string {
-    const name = custom[id];
-    if (name) return m.notif_sound_custom({ name });
+    const names = custom[id];
+    if (names.length === 1) return m.notif_sound_custom({ name: names[0] });
+    // Several sounds: name the pool rather than one of them, since which one
+    // plays is decided when the cue fires.
+    if (names.length > 1) return m.notif_sound_random({ n: names.length });
     return presetLabel(selectedSound(id));
   }
 
@@ -125,10 +129,10 @@
     openMenu = null;
     errors = { ...errors, [id]: undefined };
     try {
-      // A custom file always wins, so drop it when the user picks a preset.
-      if (custom[id]) {
+      // Added sounds always win, so clear them when the user picks a preset.
+      if (custom[id].length) {
         await clearCustomAudio(id);
-        custom = { ...custom, [id]: null };
+        custom = { ...custom, [id]: [] };
       }
       const updated = await setSetting(SOUND_KEY[id], preset);
       settings.set(updated);
@@ -150,18 +154,30 @@
     }
     if (!path) return;
     try {
-      let displayName: string;
       if (isMobile) {
         // Android returns content:// URIs that Rust cannot open: read the
         // bytes in the webview and hand them over.
         const { name, dataB64 } = await readPickedFileAsBase64(path);
-        displayName = await setCustomAudioBytes(id, name, dataB64);
+        await setCustomAudioBytes(id, name, dataB64);
       } else {
-        displayName = await setCustomAudio(id, path);
+        await setCustomAudio(id, path);
       }
-      custom = { ...custom, [id]: displayName };
+      // The backend decides the stored name, so read the list back rather than
+      // guessing at it.
+      await refreshAudioInfo();
     } catch (err) {
-      await logError(`[audio] setCustomAudio failed: ${err}`);
+      await logError(`[audio] adding a sound failed: ${err}`);
+      errors = { ...errors, [id]: String(err) };
+    }
+  }
+
+  async function removeOne(id: AudioCueKey, name: string) {
+    try {
+      await removeCustomAudio(id, name);
+      await refreshAudioInfo();
+      errors = { ...errors, [id]: undefined };
+    } catch (err) {
+      await logError(`[audio] removeCustomAudio failed: ${err}`);
       errors = { ...errors, [id]: String(err) };
     }
   }
@@ -169,7 +185,7 @@
   async function restoreAudio(id: AudioCueKey) {
     try {
       await clearCustomAudio(id);
-      custom = { ...custom, [id]: null };
+      custom = { ...custom, [id]: [] };
       errors = { ...errors, [id]: undefined };
     } catch (err) {
       await logError(`[audio] clearCustomAudio failed: ${err}`);
@@ -190,7 +206,7 @@
   <div class="audio-row">
     <div class="audio-meta">
       <span class="label">{cue.label()}</span>
-      <span class="file-name" class:custom={custom[id] !== null}>{currentLabel(id)}</span>
+      <span class="file-name" class:custom={custom[id].length > 0}>{currentLabel(id)}</span>
     </div>
     <div class="audio-actions">
       <div class="snd-dropdown">
@@ -202,7 +218,7 @@
           onclick={() => (openMenu = openMenu === id ? null : id)}
         >
           <span class="snd-trigger-label">
-            {custom[id] ? m.notif_sound_custom_short() : presetLabel(selectedSound(id))}
+            {custom[id].length ? m.notif_sound_custom_short() : presetLabel(selectedSound(id))}
           </span>
           <svg class="chevron" width="10" height="6" viewBox="0 0 10 6" aria-hidden="true">
             <polyline
@@ -221,9 +237,9 @@
               <!-- svelte-ignore a11y_interactive_supports_focus -->
               <li
                 class="snd-option"
-                class:selected={!custom[id] && selectedSound(id) === preset}
+                class:selected={!custom[id].length && selectedSound(id) === preset}
                 role="option"
-                aria-selected={!custom[id] && selectedSound(id) === preset}
+                aria-selected={!custom[id].length && selectedSound(id) === preset}
                 onmousedown={() => choosePreset(id, preset)}
               >
                 {presetLabel(preset)}
@@ -233,12 +249,12 @@
             <!-- svelte-ignore a11y_interactive_supports_focus -->
             <li
               class="snd-option"
-              class:selected={custom[id] !== null}
+              class:selected={custom[id].length > 0}
               role="option"
-              aria-selected={custom[id] !== null}
+              aria-selected={custom[id].length > 0}
               onmousedown={() => pickAudio(id)}
             >
-              {m.notif_btn_choose()}
+              {custom[id].length ? m.notif_btn_add() : m.notif_btn_choose()}
             </li>
           </ul>
         {/if}
@@ -248,11 +264,37 @@
           <polygon points="5,3 21,12 5,21" fill="currentColor" />
         </svg>
       </button>
-      {#if custom[id] !== null}
+      {#if custom[id].length}
         <button class="btn-sm btn-restore" onclick={() => restoreAudio(id)}>{m.notif_btn_restore()}</button>
       {/if}
     </div>
   </div>
+  <!-- The pool, one chip per sound. Shown only when there is more than one,
+       because a single sound is already named in the row above. -->
+  {#if custom[id].length > 1}
+    <ul class="pool">
+      {#each custom[id] as name (name)}
+        <li class="pool-item">
+          <span class="pool-name">{name}</span>
+          <button
+            class="pool-remove"
+            onclick={() => removeOne(id, name)}
+            aria-label={m.notif_btn_remove_sound({ name })}
+            title={m.notif_btn_remove_sound({ name })}
+          >
+            <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true">
+              <path d="M1 1l8 8M9 1l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+          </button>
+        </li>
+      {/each}
+    </ul>
+    {#if id !== 'tick'}
+      <p class="note pool-note">{m.notif_pool_note()}</p>
+    {:else}
+      <p class="note pool-note">{m.notif_pool_note_tick()}</p>
+    {/if}
+  {/if}
   {#if errors[id]}
     <p class="audio-error">{errors[id]}</p>
   {/if}
@@ -473,6 +515,59 @@
     height: 1px;
     margin: 3px 0;
     background: var(--color-separator);
+  }
+
+  .pool {
+    list-style: none;
+    margin: 0;
+    padding: 0 20px 4px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  .pool-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 4px 2px 8px;
+    border-radius: 10px;
+    background: var(--color-hover);
+    font-size: 0.7rem;
+    max-width: 100%;
+  }
+
+  .pool-name {
+    font-family: monospace;
+    color: var(--color-foreground-darker, var(--color-foreground));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 150px;
+  }
+
+  .pool-remove {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--color-foreground-darker, var(--color-foreground));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: color var(--transition-default), background var(--transition-default);
+  }
+
+  .pool-remove:hover {
+    color: var(--color-foreground);
+    background: var(--color-hover);
+  }
+
+  .pool-note {
+    padding-top: 0;
   }
 
   .audio-error {

@@ -86,12 +86,17 @@ export interface UpdateInfo {
   date: string | null;
 }
 
-/** Mirrors Rust `CustomAudioInfo` — null means no custom file (preset/built-in is active). */
+/** Mirrors Rust `CustomAudioInfo`: the sounds registered per cue.
+ *
+ *  A list, not one name. Each cue holds a pool and one of them is chosen at
+ *  random when the cue fires; an empty list means the preset or built-in sound
+ *  is what plays. The tick is the exception — it fires every second, so it
+ *  always uses the first entry rather than varying. */
 export interface CustomAudioInfo {
-  work_alert: string | null;
-  short_break_alert: string | null;
-  long_break_alert: string | null;
-  tick: string | null;
+  work_alert: string[];
+  short_break_alert: string[];
+  long_break_alert: string[];
+  tick: string[];
 }
 
 /** IPC identifier of an audio cue slot. */

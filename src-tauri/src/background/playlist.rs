@@ -64,52 +64,13 @@ fn sort_key(path: &PathBuf) -> String {
     path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default()
 }
 
-/// Entropy without a dependency, the same way the pairing token gets it.
-/// Which picture comes next is not a security question.
-fn seed() -> u64 {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    let mut h = RandomState::new().build_hasher();
-    h.write_u64(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0),
-    );
-    h.finish() | 1
-}
-
 /// The order `len` images are walked in.
 ///
 /// `avoid_first` is the image that was on screen when the previous order ran
 /// out. Keeping it out of the first slot stops the rotation showing the same
 /// picture twice across the seam, which is the one repeat a viewer notices.
 pub fn build_order(len: usize, shuffle: bool, avoid_first: Option<usize>) -> Vec<usize> {
-    let mut order: Vec<usize> = (0..len).collect();
-    if !shuffle || len < 2 {
-        return order;
-    }
-
-    // Fisher-Yates with a xorshift, seeded per call.
-    let mut state = seed();
-    let mut next = move || {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        state
-    };
-    for i in (1..order.len()).rev() {
-        let j = (next() % (i as u64 + 1)) as usize;
-        order.swap(i, j);
-    }
-
-    if let Some(avoid) = avoid_first {
-        if order[0] == avoid {
-            let swap_with = 1 + (next() % (order.len() as u64 - 1)) as usize;
-            order.swap(0, swap_with);
-        }
-    }
-    order
+    crate::shuffle::permutation(len, shuffle, avoid_first)
 }
 
 /// The images a backdrop is cycling through, and where in them it is.
@@ -251,28 +212,6 @@ mod tests {
     #[test]
     fn a_missing_folder_is_empty_rather_than_an_error() {
         assert!(scan(Path::new("/definitely/not/here")).is_empty());
-    }
-
-    #[test]
-    fn sorted_order_is_the_folder_order() {
-        assert_eq!(build_order(4, false, None), vec![0, 1, 2, 3]);
-    }
-
-    #[test]
-    fn shuffled_order_is_a_permutation() {
-        let order = build_order(12, true, None);
-        let mut sorted = order.clone();
-        sorted.sort_unstable();
-        assert_eq!(sorted, (0..12).collect::<Vec<_>>(), "every image appears exactly once");
-    }
-
-    #[test]
-    fn a_shuffled_order_does_not_open_on_the_image_that_just_finished() {
-        // The one repeat a viewer notices is the same picture twice in a row
-        // across the wrap, so it is the one the order has to rule out.
-        for _ in 0..200 {
-            assert_ne!(build_order(6, true, Some(3))[0], 3);
-        }
     }
 
     #[test]

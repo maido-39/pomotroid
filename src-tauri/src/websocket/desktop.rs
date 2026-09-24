@@ -64,6 +64,8 @@ pub trait Backend: Send + Sync {
     fn get_audio(&self, cue: AudioCue) -> Result<AudioSource, String>;
     fn set_audio(&self, cue: AudioCue, name: &str, bytes: &[u8]) -> Result<String, String>;
     fn clear_audio(&self, cue: AudioCue) -> Result<(), String>;
+    /// Remove one sound from a cue's pool.
+    fn remove_audio(&self, cue: AudioCue, name: &str) -> Result<(), String>;
     fn audio_info(&self) -> Result<CustomAudioInfo, String>;
     fn app_info(&self) -> AppInfo;
 }
@@ -150,11 +152,15 @@ impl Backend for AppBackend {
     }
 
     fn set_audio(&self, cue: AudioCue, name: &str, bytes: &[u8]) -> Result<String, String> {
-        commands::audio_set_bytes_impl(&self.app, cue, name, bytes)
+        commands::audio_add_bytes_impl(&self.app, cue, name, bytes)
     }
 
     fn clear_audio(&self, cue: AudioCue) -> Result<(), String> {
         commands::audio_clear_impl(&self.app, cue)
+    }
+
+    fn remove_audio(&self, cue: AudioCue, name: &str) -> Result<(), String> {
+        commands::audio_remove_impl(&self.app, cue, name)
     }
 
     fn audio_info(&self) -> Result<CustomAudioInfo, String> {
@@ -677,6 +683,12 @@ pub fn handle_client_message(text: &str, backend: &dyn Backend, ctx: &ConnCtx) -
                 backend.clear_audio(cue)?;
                 reply("ok", id, None)
             }
+            "removeAudio" => {
+                let cue_key = str_field(&msg, "cue")?;
+                let cue = AudioCue::from_key(cue_key).ok_or_else(|| format!("unknown cue '{cue_key}'"))?;
+                backend.remove_audio(cue, str_field(&msg, "name")?)?;
+                reply("ok", id, None)
+            }
             "getAudioInfo" => reply("audioInfo", id, Some(json!(backend.audio_info()?))),
             other => return Err(format!("unknown message type '{other}'")),
         })
@@ -1025,6 +1037,10 @@ mod tests {
         }
         fn clear_audio(&self, cue: AudioCue) -> Result<(), String> {
             self.calls.lock().unwrap().push(format!("audio:clear:{}", cue.key()));
+            Ok(())
+        }
+        fn remove_audio(&self, cue: AudioCue, name: &str) -> Result<(), String> {
+            self.calls.lock().unwrap().push(format!("audio:remove:{}:{name}", cue.key()));
             Ok(())
         }
         fn audio_info(&self) -> Result<CustomAudioInfo, String> {

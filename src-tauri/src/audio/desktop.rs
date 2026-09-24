@@ -18,8 +18,9 @@ use std::sync::{Arc, Mutex};
 
 use rodio::{Decoder, DeviceSinkBuilder, Player};
 
+use super::pool;
 use super::common::{
-    resolve_source, AudioCue, AudioSource, CustomAudioInfo, CustomAudioPaths, SoundSelection,
+    resolve_source, AudioCue, AudioSource, CustomAudioInfo, SoundSelection,
 };
 use crate::settings::Settings;
 
@@ -56,7 +57,7 @@ impl From<&Settings> for AudioSettings {
 pub struct AudioManager {
     tx: mpsc::SyncSender<PlayRequest>,
     settings: Arc<Mutex<AudioSettings>>,
-    pub custom_paths: Arc<Mutex<CustomAudioPaths>>,
+    pub picker: Arc<Mutex<pool::Picker>>,
 }
 
 impl AudioManager {
@@ -74,7 +75,7 @@ impl AudioManager {
         Some(Arc::new(Self {
             tx,
             settings: Arc::new(Mutex::new(AudioSettings::from(initial))),
-            custom_paths: Arc::new(Mutex::new(CustomAudioPaths::default())),
+            picker: Arc::new(Mutex::new(pool::Picker::default())),
         }))
     }
 
@@ -94,11 +95,15 @@ impl AudioManager {
         *self.settings.lock().unwrap() = AudioSettings::from(s);
     }
 
-    /// Resolve the bytes currently active for `cue` (custom → preset → default).
+    /// Resolve the bytes currently active for `cue` (pool → preset → default).
+    ///
+    /// The pool is consulted at play time, so a sound added in Settings is in
+    /// play on the next round without anything being told about it, and which
+    /// of several sounds is used is decided here rather than stored.
     pub fn resolve(&self, cue: AudioCue) -> AudioSource {
-        let custom = self.custom_paths.lock().unwrap().get(cue).cloned();
+        let chosen = self.picker.lock().unwrap().choose(cue);
         let selection = self.settings.lock().unwrap().sounds.clone();
-        resolve_source(cue, custom.as_deref(), &selection)
+        resolve_source(cue, chosen.as_deref(), &selection)
     }
 
     /// Play the given cue at the current stored volume.
@@ -130,19 +135,24 @@ impl AudioManager {
         }
     }
 
-    /// Set a custom file path for the given cue slot.
-    pub fn set_custom_path(&self, cue: AudioCue, path: PathBuf) {
-        self.custom_paths.lock().unwrap().set(cue, Some(path));
+    /// Point the pools at the directory that holds them.
+    pub fn set_audio_dir(&self, dir: PathBuf) {
+        self.picker.lock().unwrap().set_audio_dir(dir);
     }
 
-    /// Remove the custom path for the given cue slot, reverting to the preset/built-in sound.
-    pub fn clear_custom_path(&self, cue: AudioCue) {
-        self.custom_paths.lock().unwrap().set(cue, None);
+    /// Tell the pools that `cue`'s sounds changed on disk.
+    pub fn pool_changed(&self, cue: AudioCue) {
+        self.picker.lock().unwrap().invalidate(cue);
     }
 
-    /// Return the display names (file names only) of any configured custom files.
+    /// The sounds registered for each cue, as the user should see them.
     pub fn get_custom_info(&self) -> CustomAudioInfo {
-        self.custom_paths.lock().unwrap().info()
+        let picker = self.picker.lock().unwrap();
+        let mut info = CustomAudioInfo::default();
+        for cue in AudioCue::ALL {
+            info.set(cue, picker.names(cue));
+        }
+        info
     }
 }
 
@@ -206,7 +216,7 @@ mod tests {
         AudioManager {
             tx: mpsc::sync_channel(1).0,
             settings: Arc::new(Mutex::new(AudioSettings::from(settings))),
-            custom_paths: Arc::new(Mutex::new(CustomAudioPaths::default())),
+            picker: Arc::new(Mutex::new(pool::Picker::default())),
         }
     }
 
@@ -224,17 +234,28 @@ mod tests {
     }
 
     #[test]
-    fn custom_paths_set_and_clear() {
+    fn the_manager_reports_and_plays_what_is_in_the_pools() {
+        let dir = std::env::temp_dir().join(format!("pomotroid-mgr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        pool::add_bytes(&dir, AudioCue::WorkAlert, "one.wav", b"aaa").unwrap();
+        pool::add_bytes(&dir, AudioCue::Tick, "tick.wav", b"bbb").unwrap();
+
         let mgr = manager(&Settings::default());
-        mgr.set_custom_path(AudioCue::WorkAlert, PathBuf::from("/tmp/test.mp3"));
-        assert_eq!(
-            mgr.custom_paths.lock().unwrap().work_alert,
-            Some(PathBuf::from("/tmp/test.mp3"))
-        );
-        mgr.set_custom_path(AudioCue::Tick, PathBuf::from("/tmp/tick.wav"));
-        assert_eq!(mgr.get_custom_info().tick.as_deref(), Some("tick.wav"));
-        mgr.clear_custom_path(AudioCue::WorkAlert);
-        assert!(mgr.custom_paths.lock().unwrap().work_alert.is_none());
+        assert!(mgr.get_custom_info().work_alert.is_empty(), "nowhere to look yet");
+
+        mgr.set_audio_dir(dir.clone());
+        assert_eq!(mgr.get_custom_info().work_alert, vec!["one.wav"]);
+        assert_eq!(mgr.get_custom_info().tick, vec!["tick.wav"]);
+        // A pooled sound beats the preset, the same way a custom file used to.
+        assert_eq!(mgr.resolve(AudioCue::WorkAlert).origin, "custom");
+
+        pool::remove(&dir, AudioCue::WorkAlert, "one.wav").unwrap();
+        mgr.pool_changed(AudioCue::WorkAlert);
+        assert!(mgr.get_custom_info().work_alert.is_empty());
+        assert_eq!(mgr.resolve(AudioCue::WorkAlert).origin, "default", "back to the built-in");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -39,6 +39,7 @@ export const getCustomAudioInfo = b.getCustomAudioInfo;
 export const setCustomAudio = b.setCustomAudio;
 export const setCustomAudioBytes = b.setCustomAudioBytes;
 export const clearCustomAudio = b.clearCustomAudio;
+export const removeCustomAudio = b.removeCustomAudio;
 export const audioPreview = b.audioPreview;
 export const audioPresets = b.audioPresets;
 export const openAudioFilePicker = b.openAudioFilePicker;
