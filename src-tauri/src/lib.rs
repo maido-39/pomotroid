@@ -26,7 +26,8 @@ use commands::{
     check_update,
     install_update,
     audio_clear_custom, audio_get_custom_info, audio_presets, audio_preview, audio_set_custom, audio_set_custom_bytes,
-    background_clear_custom, background_get, background_set_custom, background_set_custom_bytes,
+    background_clear_custom, background_get, background_reset_framing, background_set_custom,
+    background_set_custom_bytes, background_set_framing,
     get_log_dir, open_log_dir,
     notification_show,
     remote_connect, remote_disconnect, remote_parse_pairing, remote_status,
@@ -315,6 +316,8 @@ pub fn run() {
             background_set_custom_bytes,
             background_clear_custom,
             background_get,
+            background_set_framing,
+            background_reset_framing,
             // Notifications
             notification_show,
             // Diagnostics

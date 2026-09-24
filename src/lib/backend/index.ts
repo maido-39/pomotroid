@@ -48,6 +48,8 @@ export const getBackground = b.getBackground;
 export const setCustomBackground = b.setCustomBackground;
 export const setCustomBackgroundBytes = b.setCustomBackgroundBytes;
 export const clearCustomBackground = b.clearCustomBackground;
+export const setBackgroundFraming = b.setBackgroundFraming;
+export const resetBackgroundFraming = b.resetBackgroundFraming;
 export const openImageFilePicker = b.openImageFilePicker;
 
 // Diagnostics
@@ -87,6 +89,7 @@ export const onSessionsCleared = b.onSessionsCleared;
 export const onSessionsChanged = b.onSessionsChanged;
 export const onAudioChanged = b.onAudioChanged;
 export const onBackgroundChanged = b.onBackgroundChanged;
+export const onBackgroundFraming = b.onBackgroundFraming;
 export const onRemoteStatus = b.onRemoteStatus;
 export const onWebsocketClients = b.onWebsocketClients;
 

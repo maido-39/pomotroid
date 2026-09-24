@@ -19,12 +19,21 @@ pub const ALLOWED_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "
 pub const MAX_BYTES: usize = 15 * 1024 * 1024;
 
 /// Info returned to the frontend.
+///
+/// The framing travels with the image rather than living in the settings
+/// table: each image is framed on its own, so whoever paints it needs the
+/// image and its framing together or the two can disagree for a frame.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BackgroundInfo {
     /// Original file name chosen by the user (from settings), or the stored file name.
     pub name: String,
     /// `data:<mime>;base64,...`
     pub data_url: String,
+    /// Identity this image's framing is stored under.
+    pub key: String,
+    pub pos_x: u32,
+    pub pos_y: u32,
+    pub zoom: u32,
 }
 
 /// Directory that holds the background image.

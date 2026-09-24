@@ -13,6 +13,7 @@ import type {
   Theme,
   CustomAudioInfo,
   BackgroundInfo,
+  FramingChange,
   DetailedStats,
   HeatmapStats,
   RemoteStatus,
@@ -369,10 +370,56 @@ export const audioPreview = async (cue: AudioCueKey) => {
 export const audioPresets = async () => ['bell', 'chime', 'digital', 'marimba', 'soft'];
 export const openAudioFilePicker = async (): Promise<string | null> => null;
 
+// Framing is per device — the desktop's window and this browser tab are not
+// the same shape — so it is kept here rather than asked of the desktop. The
+// browser build has no database of its own, so localStorage is the store.
+const FRAMING_PREFIX = 'pomotroid.framing.';
+const DEFAULT_FRAMING = { pos_x: 50, pos_y: 50, zoom: 100 };
+
+function readFraming(key: string) {
+  try {
+    const raw = localStorage.getItem(FRAMING_PREFIX + key);
+    if (!raw) return DEFAULT_FRAMING;
+    const v = JSON.parse(raw);
+    return {
+      pos_x: Number(v.pos_x) || 0,
+      pos_y: Number(v.pos_y) || 0,
+      zoom: Number(v.zoom) || 100,
+    };
+  } catch {
+    return DEFAULT_FRAMING;
+  }
+}
+
 export const getBackground = async (): Promise<BackgroundInfo | null> => {
   const p = await payload<{ name: string; mime: string; data_b64: string } | null>({ type: 'getBackground' });
   if (!p) return null;
-  return { name: p.name, data_url: `data:${p.mime};base64,${p.data_b64}` };
+  const key = `remote:${p.name}`;
+  return { name: p.name, data_url: `data:${p.mime};base64,${p.data_b64}`, key, ...readFraming(key) };
+};
+
+export const setBackgroundFraming = async (
+  key: string,
+  posX: number,
+  posY: number,
+  zoom: number
+): Promise<void> => {
+  const framing = { pos_x: posX, pos_y: posY, zoom };
+  try {
+    localStorage.setItem(FRAMING_PREFIX + key, JSON.stringify(framing));
+  } catch {
+    // Private windows and blocked site data: the framing just will not stick.
+  }
+  emit('background:framing', { key, ...framing });
+};
+
+export const resetBackgroundFraming = async (key: string): Promise<void> => {
+  try {
+    localStorage.removeItem(FRAMING_PREFIX + key);
+  } catch {
+    // As above.
+  }
+  emit('background:framing', { key, ...DEFAULT_FRAMING });
 };
 export const setCustomBackground = async (_srcPath: string): Promise<string> => {
   throw new Error('file picking is not available in the browser build');
@@ -425,6 +472,7 @@ export const onSessionsCleared = sub<void>('sessions:changed');
 export const onSessionsChanged = sub<void>('sessions:changed');
 export const onAudioChanged = sub<string>('audio:changed');
 export const onBackgroundChanged = sub<void>('background:changed');
+export const onBackgroundFraming = sub<FramingChange>('background:framing');
 export const onRemoteStatus = sub<RemoteStatus>('remote:status');
 export const onWebsocketClients = sub<{ connected: number; authed: number }>('websocket:clients');
 export const onAudioUnlocked = sub<void>('web:audio-unlocked');

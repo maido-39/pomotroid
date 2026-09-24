@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import type { Theme } from '$lib/types';
   import { settings } from '$lib/stores/settings';
+  import { framingPreview } from '$lib/stores/framing';
   import { applyTheme } from '$lib/stores/theme';
   import {
     getThemes,
@@ -13,6 +14,8 @@
     clearCustomBackground,
     openImageFilePicker,
     onBackgroundChanged,
+    setBackgroundFraming,
+    resetBackgroundFraming,
   } from '$lib/backend';
   import { resolveThemeName } from '$lib/utils/theme';
   import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -30,6 +33,11 @@
   let bgName = $state<string | null>(null);
   let bgDataUrl = $state<string | null>(null);
   let bgError = $state<string | null>(null);
+  // Which image the framing below belongs to, and how it is framed. Both come
+  // from the image itself rather than the settings store — each image carries
+  // its own framing.
+  let bgKey = $state<string | null>(null);
+  let frame = $state({ ...FRAMING_DEFAULTS });
   // Local mirrors so the sliders move instantly while the save round-trips.
   let bgOpacity = $state($settings.bg_image_opacity);
   let bgBlur = $state($settings.bg_image_blur);
@@ -47,6 +55,10 @@
       const info = await getBackground();
       bgName = info?.name ?? null;
       bgDataUrl = info?.data_url ?? null;
+      bgKey = info?.key ?? null;
+      frame = info
+        ? { posX: info.pos_x, posY: info.pos_y, zoom: info.zoom }
+        : { ...FRAMING_DEFAULTS };
     } catch (err) {
       await warn(`[background] getBackground failed: ${err}`);
     }
@@ -122,35 +134,35 @@
     persistSetting('window_opacity', value);
   }
 
-  // Framing: the gesture updates the store optimistically so the live backdrop
-  // tracks the drag, and only the end of the gesture reaches the database.
+  // Framing belongs to the image, not to the settings table, so it is saved
+  // against the image's key. The gesture drives a same-window preview store so
+  // the live backdrop tracks the drag; only the end of it reaches the database.
   function previewFraming(posX: number, posY: number, zoom: number) {
-    settings.set({
-      ...$settings,
-      bg_image_pos_x: posX,
-      bg_image_pos_y: posY,
-      bg_image_zoom: zoom,
-    });
+    frame = { posX, posY, zoom };
+    if (bgKey) framingPreview.set({ key: bgKey, posX, posY, zoom });
   }
 
   async function commitFraming(posX: number, posY: number, zoom: number) {
-    const wanted: [string, number][] = [
-      ['bg_image_pos_x', posX],
-      ['bg_image_pos_y', posY],
-      ['bg_image_zoom', zoom],
-    ];
+    frame = { posX, posY, zoom };
+    if (!bgKey) return;
     try {
-      for (const [key, value] of wanted) {
-        const updated = await setSetting(key, String(Math.round(value)));
-        settings.set(updated);
-      }
+      await setBackgroundFraming(bgKey, Math.round(posX), Math.round(posY), Math.round(zoom));
     } catch (err) {
       await logError(`[background] framing save failed: ${err}`);
+    } finally {
+      framingPreview.set(null);
     }
   }
 
   async function resetFraming() {
-    await commitFraming(FRAMING_DEFAULTS.posX, FRAMING_DEFAULTS.posY, FRAMING_DEFAULTS.zoom);
+    frame = { ...FRAMING_DEFAULTS };
+    framingPreview.set(null);
+    if (!bgKey) return;
+    try {
+      await resetBackgroundFraming(bgKey);
+    } catch (err) {
+      await logError(`[background] framing reset failed: ${err}`);
+    }
   }
 
   let themes = $state<Theme[]>([]);
@@ -441,9 +453,9 @@
     {#if bgDataUrl}
       <BackgroundFraming
         dataUrl={bgDataUrl}
-        posX={$settings.bg_image_pos_x}
-        posY={$settings.bg_image_pos_y}
-        zoom={$settings.bg_image_zoom}
+        posX={frame.posX}
+        posY={frame.posY}
+        zoom={frame.zoom}
         onchange={previewFraming}
         oncommit={commitFraming}
         onreset={resetFraming}

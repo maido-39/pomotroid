@@ -127,10 +127,29 @@ export interface WsClients {
   authed: number;
 }
 
-/** Returned by `background_get` — null when no image is configured. */
-export interface BackgroundInfo {
+/** How one image sits in the window: CSS `background-position` percentages
+ *  plus a zoom where 100 is plain `cover`. */
+export interface Framing {
+  pos_x: number;
+  pos_y: number;
+  zoom: number;
+}
+
+/** A framing change for one image, as `background:framing` reports it. */
+export interface FramingChange extends Framing {
+  key: string;
+}
+
+/** Returned by `background_get` — null when no image is configured.
+ *
+ *  The framing travels with the image rather than sitting in the settings
+ *  store: every image is framed on its own, so a portrait and a landscape
+ *  photo in the same folder can each be right. */
+export interface BackgroundInfo extends Framing {
   name: string;
   data_url: string;
+  /** Identity this image's framing is stored under. */
+  key: string;
 }
 
 /** Mirrors Rust `Theme` struct. Color keys include the `--` CSS var prefix. */

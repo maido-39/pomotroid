@@ -34,8 +34,17 @@ export interface Framing {
   position: string;
 }
 
-/** Centred and unzoomed — what a newly chosen image starts at. */
-export const FRAMING_DEFAULTS = { posX: 50, posY: 50, zoom: 100 } as const;
+/** A framing as the user sets it: position percentages plus a zoom where 100
+ *  is plain `cover`. Each image carries its own. */
+export interface Placement {
+  posX: number;
+  posY: number;
+  zoom: number;
+}
+
+/** Centred and unzoomed — what an image nobody has adjusted is framed at.
+ *  Deliberately not `as const`: callers spread it into mutable state. */
+export const FRAMING_DEFAULTS: Placement = { posX: 50, posY: 50, zoom: 100 };
 
 /** Mirrors the clamp the Rust side applies when loading settings. */
 export function clampPos(value: number): number {

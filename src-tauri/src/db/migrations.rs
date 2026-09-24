@@ -137,6 +137,33 @@ const MIGRATION_11: &str = "
     INSERT INTO schema_version VALUES (11);
 ";
 
+/// Gives each background image its own framing.
+///
+/// One framing for every image only works while there is one image. Cycling
+/// through a folder puts a portrait photo and a landscape one behind the same
+/// two numbers, and whichever was not framed is wrong. Framing therefore
+/// leaves the settings table for a row per image, keyed by how the image is
+/// identified: the fixed stem for the single stored image, the file's path for
+/// one out of a folder. An image with no row is framed automatically, which is
+/// what the centred, unzoomed values mean.
+///
+/// The framing the user already adjusted becomes the row for the stored image,
+/// so upgrading does not silently re-centre the picture they set up.
+const MIGRATION_12: &str = "
+    CREATE TABLE IF NOT EXISTS background_framing (
+        key   TEXT PRIMARY KEY,
+        pos_x INTEGER NOT NULL,
+        pos_y INTEGER NOT NULL,
+        zoom  INTEGER NOT NULL
+    );
+    INSERT OR IGNORE INTO background_framing (key, pos_x, pos_y, zoom)
+    SELECT 'custom_background',
+           COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'bg_image_pos_x'), 50),
+           COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'bg_image_pos_y'), 50),
+           COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'bg_image_zoom'), 100);
+    INSERT INTO schema_version VALUES (12);
+";
+
 /// Apply any pending migrations. Each migration is wrapped in a transaction
 /// so a partial failure leaves the database unchanged.
 pub fn run(conn: &Connection) -> Result<()> {
@@ -208,6 +235,12 @@ pub fn run(conn: &Connection) -> Result<()> {
         log::info!("[db/migrations] MIGRATION_11 complete");
     }
 
+    if version < 12 {
+        log::info!("[db/migrations] applying MIGRATION_12: per-image background framing");
+        conn.execute_batch(&format!("BEGIN; {MIGRATION_12} COMMIT;"))?;
+        log::info!("[db/migrations] MIGRATION_12 complete");
+    }
+
     Ok(())
 }
 
@@ -243,7 +276,30 @@ mod tests {
         let v: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 11);
+        assert_eq!(v, 12);
+    }
+
+    #[test]
+    fn framing_carries_over_from_the_settings_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Stop one migration short, set a framing the way the old build did,
+        // then let MIGRATION_12 run over it.
+        conn.execute_batch(&format!("BEGIN; {MIGRATION_1} COMMIT;")).unwrap();
+        conn.execute_batch(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES
+                ('bg_image_pos_x', '20'), ('bg_image_pos_y', '80'), ('bg_image_zoom', '175');",
+        )
+        .unwrap();
+        run(&conn).unwrap();
+
+        let (x, y, z): (u32, u32, u32) = conn
+            .query_row(
+                "SELECT pos_x, pos_y, zoom FROM background_framing WHERE key = 'custom_background'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((x, y, z), (20, 80, 175), "the framing the user set is kept");
     }
 
     #[test]

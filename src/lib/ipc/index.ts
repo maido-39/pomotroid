@@ -11,6 +11,7 @@ import type {
   CustomAudioInfo,
   AudioCueKey,
   BackgroundInfo,
+  FramingChange,
   RemoteStatus,
   PairingTarget,
   PairingInfo,
@@ -94,6 +95,16 @@ export const setCustomBackgroundBytes = (name: string, dataB64: string) =>
 
 /** Delete the custom background image. */
 export const clearCustomBackground = () => invoke<void>('background_clear_custom');
+
+/** Remember how the image identified by `key` sits in this window.
+ *  Framing is per device, not per account: it is never forwarded to a paired
+ *  desktop, because a phone and a desktop window crop differently. */
+export const setBackgroundFraming = (key: string, posX: number, posY: number, zoom: number) =>
+  invoke<void>('background_set_framing', { key, posX, posY, zoom });
+
+/** Send the image identified by `key` back to automatic framing. */
+export const resetBackgroundFraming = (key: string) =>
+  invoke<void>('background_reset_framing', { key });
 
 /** Open a native file picker filtered to image formats. Returns a path or null. */
 export const openImageFilePicker = (): Promise<string | null> =>
@@ -204,6 +215,11 @@ export const onAudioChanged = (cb: (cue: string) => void): Promise<UnlistenFn> =
 /** Fired after the background image is set or cleared. */
 export const onBackgroundChanged = (cb: () => void): Promise<UnlistenFn> =>
   listen<void>('background:changed', () => cb());
+
+/** Fired when one image's framing changes — the image itself is unchanged, so
+ *  listeners move the picture instead of reloading it. */
+export const onBackgroundFraming = (cb: (change: FramingChange) => void): Promise<UnlistenFn> =>
+  listen<FramingChange>('background:framing', (e) => cb(e.payload));
 
 /** Fired when a session is recorded (stats views refresh on it). */
 export const onSessionsChanged = (cb: () => void): Promise<UnlistenFn> =>

@@ -8,9 +8,10 @@
   // the sibling content `position: relative; z-index: 1`.
   import { onMount } from 'svelte';
   import { settings } from '$lib/stores/settings';
-  import { getBackground, onBackgroundChanged } from '$lib/backend';
+  import { framingPreview } from '$lib/stores/framing';
+  import { getBackground, onBackgroundChanged, onBackgroundFraming } from '$lib/backend';
   import { warn } from '$lib/utils/log';
-  import { dataUrlToObjectUrl, frameBackground } from '$lib/utils/backdrop';
+  import { dataUrlToObjectUrl, frameBackground, FRAMING_DEFAULTS } from '$lib/utils/backdrop';
 
   // The backend hands over a `data:` URL, which can be megabytes of base64.
   // That string must never reach an inline style that changes: every slider
@@ -22,6 +23,12 @@
   let natural = $state({ w: 0, h: 0 });
   let boxW = $state(0);
   let boxH = $state(0);
+  // Framing belongs to the image on screen, not to the settings store: every
+  // image is framed on its own, so a portrait and a landscape photo in the
+  // same folder can each be right. `background:framing` moves the current one
+  // without the picture being fetched again.
+  let imageKey = $state<string | null>(null);
+  let placement = $state({ ...FRAMING_DEFAULTS });
 
   const visible = $derived($settings.bg_image_enabled && src !== null);
   const opacity = $derived(Math.min(100, Math.max(0, $settings.bg_image_opacity)) / 100);
@@ -29,27 +36,32 @@
   const brightness = $derived(Math.min(150, Math.max(20, $settings.bg_image_brightness)) / 100);
   // Scale up slightly so the blurred edges never reveal the background color.
   const scale = $derived(1 + Math.min(0.12, blur / 250 + 0.02));
+  // A gesture in the framing editor overrides the stored value while it is in
+  // flight, so the picture tracks the drag without a round trip per frame.
+  const live = $derived(
+    $framingPreview && $framingPreview.key === imageKey ? $framingPreview : placement
+  );
   const framing = $derived(
-    frameBackground(
-      { w: boxW, h: boxH },
-      natural,
-      $settings.bg_image_pos_x,
-      $settings.bg_image_pos_y,
-      $settings.bg_image_zoom
-    )
+    frameBackground({ w: boxW, h: boxH }, natural, live.posX, live.posY, live.zoom)
   );
 
   function release() {
     if (src) URL.revokeObjectURL(src);
     src = null;
     natural = { w: 0, h: 0 };
+    imageKey = null;
+    placement = { ...FRAMING_DEFAULTS };
   }
 
   async function load() {
     let dataUrl: string | null = null;
+    let key: string | null = null;
+    let next = { ...FRAMING_DEFAULTS };
     try {
       const info = await getBackground();
       dataUrl = info?.data_url ?? null;
+      key = info?.key ?? null;
+      if (info) next = { posX: info.pos_x, posY: info.pos_y, zoom: info.zoom };
     } catch (err) {
       await warn(`[backdrop] failed to load background: ${err}`);
     }
@@ -57,6 +69,8 @@
     if (!dataUrl) return;
     try {
       src = dataUrlToObjectUrl(dataUrl);
+      imageKey = key;
+      placement = next;
       const img = new Image();
       img.onload = () => {
         natural = { w: img.naturalWidth, h: img.naturalHeight };
@@ -70,12 +84,20 @@
 
   onMount(() => {
     let unlisten: (() => void) | undefined;
+    let unlistenFraming: (() => void) | undefined;
     (async () => {
       await load();
       unlisten = await onBackgroundChanged(load);
+      unlistenFraming = await onBackgroundFraming((change) => {
+        // Another window re-framed the picture we are showing. Move it; the
+        // image itself has not changed, so there is nothing to fetch.
+        if (change.key !== imageKey) return;
+        placement = { posX: change.pos_x, posY: change.pos_y, zoom: change.zoom };
+      });
     })();
     return () => {
       unlisten?.();
+      unlistenFraming?.();
       release();
     };
   });

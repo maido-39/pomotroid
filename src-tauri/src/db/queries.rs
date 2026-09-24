@@ -296,6 +296,76 @@ fn unix_now() -> i64 {
         .as_secs() as i64
 }
 
+// ---------------------------------------------------------------------------
+// Background framing — one row per image
+// ---------------------------------------------------------------------------
+
+/// Where inside the window an image sits, and how far it is zoomed in.
+///
+/// `pos_x` / `pos_y` are percentages the way CSS `background-position` reads
+/// them; `zoom` is a percentage of the `cover` size, so 100 is plain `cover`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Framing {
+    pub pos_x: u32,
+    pub pos_y: u32,
+    pub zoom: u32,
+}
+
+impl Default for Framing {
+    /// Centred and unzoomed — what an image nobody has adjusted should get.
+    fn default() -> Self {
+        Self { pos_x: 50, pos_y: 50, zoom: 100 }
+    }
+}
+
+impl Framing {
+    /// Hold the values to the ranges the backdrop honours. A row written by an
+    /// older build, or by hand, cannot push the image somewhere unreachable.
+    pub fn clamped(self) -> Self {
+        Self {
+            pos_x: self.pos_x.min(100),
+            pos_y: self.pos_y.min(100),
+            zoom: self.zoom.clamp(100, 300),
+        }
+    }
+}
+
+/// The framing stored for `key`, or `None` when the image was never adjusted.
+pub fn get_framing(conn: &Connection, key: &str) -> Result<Option<Framing>> {
+    let mut stmt =
+        conn.prepare("SELECT pos_x, pos_y, zoom FROM background_framing WHERE key = ?1")?;
+    let mut rows = stmt.query(params![key])?;
+    match rows.next()? {
+        Some(row) => Ok(Some(
+            Framing { pos_x: row.get(0)?, pos_y: row.get(1)?, zoom: row.get(2)? }.clamped(),
+        )),
+        None => Ok(None),
+    }
+}
+
+/// Remember how `key` is framed.
+pub fn set_framing(conn: &Connection, key: &str, framing: Framing) -> Result<()> {
+    let f = framing.clamped();
+    conn.execute(
+        "INSERT INTO background_framing (key, pos_x, pos_y, zoom) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(key) DO UPDATE SET pos_x = ?2, pos_y = ?3, zoom = ?4",
+        params![key, f.pos_x, f.pos_y, f.zoom],
+    )?;
+    Ok(())
+}
+
+/// Send `key` back to automatic framing.
+pub fn clear_framing(conn: &Connection, key: &str) -> Result<()> {
+    conn.execute("DELETE FROM background_framing WHERE key = ?1", params![key])?;
+    Ok(())
+}
+
+/// Forget every image's framing (settings reset).
+pub fn clear_all_framing(conn: &Connection) -> Result<()> {
+    conn.execute("DELETE FROM background_framing", [])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,5 +511,57 @@ mod tests {
         assert_eq!(stats.total_work_sessions, 2);
         assert_eq!(stats.completed_work_sessions, 1);
         assert_eq!(stats.total_work_secs, 1500);
+    }
+
+    #[test]
+    fn framing_is_per_image() {
+        let conn = setup();
+        let portrait = "C:/photos/tower.jpg";
+        let landscape = "C:/photos/beach.jpg";
+
+        assert_eq!(get_framing(&conn, portrait).unwrap(), None, "untouched means automatic");
+
+        set_framing(&conn, portrait, Framing { pos_x: 50, pos_y: 12, zoom: 140 }).unwrap();
+        set_framing(&conn, landscape, Framing { pos_x: 70, pos_y: 50, zoom: 100 }).unwrap();
+
+        // The whole point: adjusting one image leaves the other alone.
+        assert_eq!(
+            get_framing(&conn, portrait).unwrap(),
+            Some(Framing { pos_x: 50, pos_y: 12, zoom: 140 })
+        );
+        assert_eq!(
+            get_framing(&conn, landscape).unwrap(),
+            Some(Framing { pos_x: 70, pos_y: 50, zoom: 100 })
+        );
+
+        // Re-framing replaces rather than piling up rows.
+        set_framing(&conn, portrait, Framing { pos_x: 50, pos_y: 30, zoom: 120 }).unwrap();
+        assert_eq!(
+            get_framing(&conn, portrait).unwrap(),
+            Some(Framing { pos_x: 50, pos_y: 30, zoom: 120 })
+        );
+
+        clear_framing(&conn, portrait).unwrap();
+        assert_eq!(get_framing(&conn, portrait).unwrap(), None);
+        assert!(get_framing(&conn, landscape).unwrap().is_some(), "only the one asked for");
+
+        clear_all_framing(&conn).unwrap();
+        assert_eq!(get_framing(&conn, landscape).unwrap(), None);
+    }
+
+    #[test]
+    fn framing_out_of_range_is_pulled_back() {
+        let conn = setup();
+        // A row from an older build, or edited by hand, must not be able to
+        // push the image somewhere the framing UI cannot bring it back from.
+        conn.execute(
+            "INSERT INTO background_framing (key, pos_x, pos_y, zoom) VALUES ('odd', 400, 900, 12)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            get_framing(&conn, "odd").unwrap(),
+            Some(Framing { pos_x: 100, pos_y: 100, zoom: 100 })
+        );
     }
 }

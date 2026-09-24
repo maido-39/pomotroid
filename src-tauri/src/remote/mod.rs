@@ -256,7 +256,19 @@ pub fn fetch_background(app: &AppHandle) -> Result<Option<BackgroundInfo>, Strin
     let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let mime = payload.get("mime").and_then(|v| v.as_str()).unwrap_or("image/png");
     let data = payload.get("data_b64").and_then(|v| v.as_str()).unwrap_or("");
-    Ok(Some(BackgroundInfo { name, data_url: format!("data:{mime};base64,{data}") }))
+    // The picture is the desktop's; how it sits is this device's business. A
+    // phone held upright crops nothing like a desktop window, so the framing
+    // is looked up here, under a key that cannot collide with a local image.
+    let key = format!("remote:{name}");
+    let f = crate::commands::framing_for(app, &key)?;
+    Ok(Some(BackgroundInfo {
+        name,
+        data_url: format!("data:{mime};base64,{data}"),
+        key,
+        pos_x: f.pos_x,
+        pos_y: f.pos_y,
+        zoom: f.zoom,
+    }))
 }
 
 /// Play the desktop's current sound for `cue` on this device (Settings preview).

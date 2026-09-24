@@ -351,9 +351,20 @@ pub fn settings_reset_impl(app: &AppHandle) -> Result<Settings, String> {
         app.emit("audio:changed", "all").ok();
     }
 
-    // Clear the custom background image.
+    // Clear the custom background image, and the framing of every image that
+    // ever had one — the rows outlive the pictures otherwise.
     if let Err(e) = background::clear(&background::dir(&data_dir)) {
         log::warn!("[background] failed to clear on settings reset: {e}");
+    }
+    {
+        let db = app.state::<DbState>();
+        let cleared = db
+            .lock()
+            .map_err(|e| e.to_string())
+            .and_then(|conn| queries::clear_all_framing(&conn).map_err(|e| e.to_string()));
+        if let Err(e) = cleared {
+            log::warn!("[background] framing not cleared on settings reset: {e}");
+        }
     }
     app.emit("background:changed", ()).ok();
 
@@ -889,7 +900,69 @@ pub fn background_get_impl(app: &AppHandle) -> Result<Option<background::Backgro
     let Some(data_url) = background::read_data_url(&dir) else {
         return Ok(None);
     };
-    Ok(Some(background::BackgroundInfo { name: background_name(app, &dir)?, data_url }))
+    let key = background::STEM.to_string();
+    let f = framing_for(app, &key)?;
+    Ok(Some(background::BackgroundInfo {
+        name: background_name(app, &dir)?,
+        data_url,
+        key,
+        pos_x: f.pos_x,
+        pos_y: f.pos_y,
+        zoom: f.zoom,
+    }))
+}
+
+/// How `key` is framed — the stored framing, or automatic when it has none.
+pub(crate) fn framing_for(app: &AppHandle, key: &str) -> Result<queries::Framing, String> {
+    let db = app.state::<DbState>();
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    Ok(queries::get_framing(&conn, key).map_err(|e| e.to_string())?.unwrap_or_default())
+}
+
+/// Remember how the image identified by `key` is framed.
+///
+/// Deliberately not forwarded to a paired desktop. Framing answers "how does
+/// this picture sit in *this* window", and a phone held upright and a desktop
+/// window are not the same shape — a framing chosen on one is wrong on the
+/// other. Each device keeps its own.
+#[tauri::command]
+pub fn background_set_framing(
+    app: AppHandle,
+    key: String,
+    pos_x: u32,
+    pos_y: u32,
+    zoom: u32,
+) -> Result<(), String> {
+    let framing = queries::Framing { pos_x, pos_y, zoom };
+    {
+        let db = app.state::<DbState>();
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        queries::set_framing(&conn, &key, framing).map_err(|e| e.to_string())?;
+    }
+    emit_framing(&app, &key, framing.clamped());
+    Ok(())
+}
+
+/// Tell the other windows where an image now sits, without making them re-read
+/// the image itself: the picture has not changed, only its framing.
+fn emit_framing(app: &AppHandle, key: &str, f: queries::Framing) {
+    app.emit(
+        "background:framing",
+        json!({ "key": key, "pos_x": f.pos_x, "pos_y": f.pos_y, "zoom": f.zoom }),
+    )
+    .ok();
+}
+
+/// Send the image identified by `key` back to automatic framing.
+#[tauri::command]
+pub fn background_reset_framing(app: AppHandle, key: String) -> Result<(), String> {
+    {
+        let db = app.state::<DbState>();
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        queries::clear_framing(&conn, &key).map_err(|e| e.to_string())?;
+    }
+    emit_framing(&app, &key, queries::Framing::default());
+    Ok(())
 }
 
 /// Copy a user-selected image into the app data dir as the background image.
