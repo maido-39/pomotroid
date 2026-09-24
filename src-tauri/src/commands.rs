@@ -1139,7 +1139,6 @@ pub fn websocket_pairing_info(app: AppHandle) -> Result<websocket::PairingInfo, 
 /// Network adapters carrying an IPv4 address, for choosing which one the
 /// pairing code should advertise.
 #[tauri::command]
-#[cfg(desktop)]
 pub fn websocket_interfaces() -> Vec<websocket::NetworkInterface> {
     websocket::network_interfaces()
 }

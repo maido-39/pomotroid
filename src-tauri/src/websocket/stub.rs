@@ -51,6 +51,18 @@ pub fn pairing_info(_app: &AppHandle) -> Result<PairingInfo, String> {
     Err("pairing info is only available on desktop".into())
 }
 
+/// Adapters are offered so a desktop can choose which address to advertise.
+/// The phone advertises nothing, so it has none to offer.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct NetworkInterface {
+    pub name: String,
+    pub address: String,
+}
+
+pub fn network_interfaces() -> Vec<NetworkInterface> {
+    Vec::new()
+}
+
 pub fn generate_token() -> String {
     String::new()
 }
