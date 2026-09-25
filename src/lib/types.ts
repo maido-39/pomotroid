@@ -68,6 +68,10 @@ export interface Settings {
   dial_countdown: boolean;
   /** How the timer is drawn: 'dial' | 'digital' | 'edge' | 'flip' | 'analog'. */
   clock_style: string;
+  /** Added font for the interface; '' = the bundled face. */
+  font_ui: string;
+  /** Added font for the timer's digits; '' = the bundled monospaced face. */
+  font_digits: string;
   language: string; // 'auto' | 'en' | 'es' | 'fr' | 'de' | 'ja'
   verbose_logging: boolean;
   check_for_updates: boolean;
@@ -161,6 +165,14 @@ export interface BackgroundInfo extends Framing {
   data_url: string;
   /** Identity this image's framing is stored under. */
   key: string;
+}
+
+/** One added font, ready for an `@font-face` rule. Mirrors Rust `FontFace`. */
+export interface FontFace {
+  name: string;
+  data_url: string;
+  /** Value for the rule's `format(...)` hint: woff2 | woff | opentype | truetype. */
+  format: string;
 }
 
 /** Mirrors Rust `Theme` struct. Color keys include the `--` CSS var prefix. */

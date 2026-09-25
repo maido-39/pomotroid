@@ -359,6 +359,12 @@ pub fn settings_reset_impl(app: &AppHandle) -> Result<Settings, String> {
         app.emit("audio:changed", "all").ok();
     }
 
+    // Drop every added font, and with it any choice pointing at one.
+    if let Err(e) = crate::fonts::clear(&crate::fonts::dir(&data_dir)) {
+        log::warn!("[fonts] failed to clear on settings reset: {e}");
+    }
+    app.emit("fonts:changed", ()).ok();
+
     // Clear the custom background image, and the framing of every image that
     // ever had one — the rows outlive the pictures otherwise.
     if let Err(e) = background::clear(&background::dir(&data_dir)) {
@@ -811,6 +817,78 @@ pub fn audio_preview(cue: String, app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn audio_presets() -> Vec<&'static str> {
     audio::PRESETS.iter().map(|(id, _)| *id).collect()
+}
+
+// ---------------------------------------------------------------------------
+// CMD-07c — Font commands
+// ---------------------------------------------------------------------------
+
+fn fonts_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(crate::fonts::dir(&crate::paths::data_dir(app)?))
+}
+
+/// Names of every font the user has added.
+///
+/// Fonts are per install, not per paired device: a phone cannot use a file that
+/// lives on the desktop, so none of these commands are forwarded.
+#[tauri::command]
+pub fn fonts_list(app: AppHandle) -> Result<Vec<String>, String> {
+    Ok(crate::fonts::list(&fonts_dir(&app)?))
+}
+
+/// Copy a font file the user picked into the app.
+#[tauri::command]
+pub fn fonts_add(app: AppHandle, src_path: String) -> Result<String, String> {
+    let dir = fonts_dir(&app)?;
+    let stored = crate::fonts::add_from_path(&dir, std::path::Path::new(&src_path))?;
+    log::info!("[fonts] added {stored}");
+    app.emit("fonts:changed", ()).ok();
+    Ok(stored)
+}
+
+/// Store a font from raw bytes. Used on Android, where the picker returns a
+/// `content://` URI that Rust cannot open.
+#[tauri::command]
+pub fn fonts_add_bytes(app: AppHandle, name: String, data_b64: String) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_b64.trim())
+        .map_err(|e| format!("invalid base64: {e}"))?;
+    let dir = fonts_dir(&app)?;
+    let stored = crate::fonts::add_bytes(&dir, &name, &bytes)?;
+    log::info!("[fonts] added {stored}");
+    app.emit("fonts:changed", ()).ok();
+    Ok(stored)
+}
+
+/// Delete one font, and stop using it wherever it was chosen.
+#[tauri::command]
+pub fn fonts_remove(app: AppHandle, name: String) -> Result<Settings, String> {
+    let dir = fonts_dir(&app)?;
+    crate::fonts::remove(&dir, &name)?;
+
+    // A setting pointing at a font that is gone would silently fall back to the
+    // bundled face while still showing the old name in the picker.
+    let settings = {
+        let db = app.state::<DbState>();
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        for key in ["font_ui", "font_digits"] {
+            if settings::get_setting(&conn, key).as_deref() == Some(name.as_str()) {
+                settings::save_setting(&conn, key, "").map_err(|e| e.to_string())?;
+            }
+        }
+        settings::load(&conn).map_err(|e| e.to_string())?
+    };
+    log::info!("[fonts] removed {name}");
+    app.emit("settings:changed", &settings).ok();
+    app.emit("fonts:changed", ()).ok();
+    Ok(settings)
+}
+
+/// One font's bytes, for the `@font-face` rule the webview installs.
+#[tauri::command]
+pub fn fonts_get(app: AppHandle, name: String) -> Result<Option<crate::fonts::FontFace>, String> {
+    Ok(crate::fonts::read_face(&fonts_dir(&app)?, &name))
 }
 
 // ---------------------------------------------------------------------------

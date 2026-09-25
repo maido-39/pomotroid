@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { isMobile, isWeb } from '$lib/utils/platform';
   import { settings } from '$lib/stores/settings';
+  import { applyFonts } from '$lib/stores/fonts';
   import { startWebSession } from '$lib/backend';
   import * as web from '$lib/remote/web';
   import * as m from '$paraglide/messages.js';
@@ -21,6 +22,14 @@
     if (typeof document === 'undefined') return;
     const pct = Math.min(100, Math.max(20, $settings.window_opacity ?? 100));
     document.documentElement.style.setProperty('--window-opacity', String(pct / 100));
+  });
+
+  // The user's chosen fonts, installed into this window. Every window runs this
+  // layout, so each installs its own faces; the bytes come from the backend and
+  // are only re-fetched when the choice actually changes.
+  $effect(() => {
+    if (typeof document === 'undefined') return;
+    void applyFonts($settings.font_ui ?? '', $settings.font_digits ?? '');
   });
 
   // Browser build: audio needs a user gesture before it may play.

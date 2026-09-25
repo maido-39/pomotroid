@@ -18,6 +18,8 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("work_rounds", "4"),
     ("dial_countdown", "true"),
     ("clock_style", "dial"),
+    ("font_ui", ""),
+    ("font_digits", ""),
     ("theme_mode", "auto"),
     ("theme_light", "Pomotroid Light"),
     ("theme_dark", "Pomotroid"),

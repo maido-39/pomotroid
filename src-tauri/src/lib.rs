@@ -2,6 +2,7 @@ pub mod audio;
 pub mod background;
 pub mod commands;
 pub mod db;
+pub mod fonts;
 pub mod mobile;
 pub mod notifications;
 pub mod paths;
@@ -30,6 +31,7 @@ use commands::{
     audio_set_custom, audio_set_custom_bytes,
     background_clear_custom, background_get, background_next, background_reset_framing,
     background_set_custom, background_set_custom_bytes, background_set_framing,
+    fonts_add, fonts_add_bytes, fonts_get, fonts_list, fonts_remove,
     get_log_dir, open_log_dir,
     notification_show,
     remote_connect, remote_disconnect, remote_parse_pairing, remote_status,
@@ -329,6 +331,12 @@ pub fn run() {
             background_set_framing,
             background_reset_framing,
             background_next,
+            // Fonts
+            fonts_list,
+            fonts_add,
+            fonts_add_bytes,
+            fonts_remove,
+            fonts_get,
             // Notifications
             notification_show,
             // Diagnostics

@@ -19,7 +19,7 @@
 
 <style>
   .time {
-    font-family: 'Mona Sans Mono', monospace;
+    font-family: var(--font-digits, 'Mona Sans Mono', ui-monospace, monospace);
     font-size: 3.4rem;
     font-weight: 250;
     font-stretch: 85%;

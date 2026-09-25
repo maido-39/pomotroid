@@ -54,6 +54,8 @@ const defaults: Settings = {
   theme_dark: 'Pomotroid',
   dial_countdown: true,
   clock_style: 'dial',
+  font_ui: '',
+  font_digits: '',
   language: 'auto',
   verbose_logging: false,
   check_for_updates: true,

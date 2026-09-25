@@ -17,6 +17,12 @@
     setBackgroundFraming,
     resetBackgroundFraming,
     openFolderPicker,
+    listFonts,
+    addFont,
+    addFontBytes,
+    removeFont,
+    openFontFilePicker,
+    onFontsChanged,
   } from '$lib/backend';
   import { resolveThemeName } from '$lib/utils/theme';
   import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -39,6 +45,66 @@
     { id: 'flip', label: () => m.appearance_clock_flip() },
     { id: 'analog', label: () => m.appearance_clock_analog() },
   ];
+
+  // --- Fonts ---
+  // Two slots rather than one: figures that are not all the same width make
+  // the time jitter sideways once a second, so the digits want a face chosen
+  // for that even when the rest of the interface does not.
+  let fonts = $state<string[]>([]);
+  let fontError = $state<string | null>(null);
+
+  async function refreshFonts() {
+    try {
+      fonts = await listFonts();
+    } catch (err) {
+      await warn(`[fonts] listFonts failed: ${err}`);
+    }
+  }
+
+  async function pickFont() {
+    fontError = null;
+    let path: string | null = null;
+    try {
+      path = await openFontFilePicker();
+    } catch (err) {
+      await logError(`[fonts] file picker error: ${err}`);
+      return;
+    }
+    if (!path) return;
+    try {
+      if (isMobile) {
+        const { name, dataB64 } = await readPickedFileAsBase64(path);
+        await addFontBytes(name, dataB64);
+      } else {
+        await addFont(path);
+      }
+      await refreshFonts();
+    } catch (err) {
+      await logError(`[fonts] adding a font failed: ${err}`);
+      fontError = String(err);
+    }
+  }
+
+  async function dropFont(name: string) {
+    fontError = null;
+    try {
+      // Removing a font also clears any slot pointing at it, so the settings
+      // come back with the answer rather than being guessed at here.
+      settings.set(await removeFont(name));
+      await refreshFonts();
+    } catch (err) {
+      await logError(`[fonts] removing a font failed: ${err}`);
+      fontError = String(err);
+    }
+  }
+
+  async function chooseFont(slot: 'font_ui' | 'font_digits', name: string) {
+    try {
+      settings.set(await setSetting(slot, name));
+    } catch (err) {
+      await logError(`[fonts] failed to set ${slot}: ${err}`);
+    }
+  }
 
   async function chooseClockStyle(id: string) {
     try {
@@ -278,6 +344,8 @@
       );
       await refreshBackground();
       cleanups.push(await onBackgroundChanged(refreshBackground));
+      await refreshFonts();
+      cleanups.push(await onFontsChanged(refreshFonts));
     })();
 
     return () => {
@@ -498,6 +566,70 @@
   </div>
   <p class="bg-hint">{m.appearance_clock_style_desc()}</p>
 
+  <!-- Fonts -->
+  <div class="group-label bg-group-label">{m.appearance_group_font()}</div>
+  <div class="clock-row">
+    <label class="clock-label" for="font-ui">{m.appearance_font_ui()}</label>
+    <select
+      id="font-ui"
+      class="clock-select"
+      value={$settings.font_ui}
+      onchange={(e) => chooseFont('font_ui', (e.currentTarget as HTMLSelectElement).value)}
+    >
+      <option value="">{m.appearance_font_bundled()}</option>
+      {#each fonts as name (name)}
+        <option value={name}>{name}</option>
+      {/each}
+    </select>
+  </div>
+  <div class="clock-row">
+    <label class="clock-label" for="font-digits">{m.appearance_font_digits()}</label>
+    <select
+      id="font-digits"
+      class="clock-select"
+      value={$settings.font_digits}
+      onchange={(e) => chooseFont('font_digits', (e.currentTarget as HTMLSelectElement).value)}
+    >
+      <option value="">{m.appearance_font_bundled()}</option>
+      {#each fonts as name (name)}
+        <option value={name}>{name}</option>
+      {/each}
+    </select>
+  </div>
+  <p class="bg-hint">{m.appearance_font_digits_desc()}</p>
+
+  {#if fonts.length}
+    <ul class="pool">
+      {#each fonts as name (name)}
+        <li class="pool-item">
+          <span class="pool-name">{name}</span>
+          <button
+            class="pool-remove"
+            onclick={() => dropFont(name)}
+            aria-label={m.appearance_font_remove({ name })}
+            title={m.appearance_font_remove({ name })}
+          >
+            <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true">
+              <path d="M1 1l8 8M9 1l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+          </button>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+  <div class="bg-row">
+    <div class="bg-meta">
+      <span class="bg-label">{m.appearance_font_add()}</span>
+      <span class="bg-file">{m.appearance_font_formats()}</span>
+    </div>
+    <div class="bg-actions">
+      <button class="btn-sm" onclick={pickFont}>{m.appearance_font_choose()}</button>
+    </div>
+  </div>
+  {#if fontError}
+    <p class="bg-error">{fontError}</p>
+  {/if}
+
   <!-- Window translucency (Win32 layered window) -->
   {#if isWindows && !isMobile}
     <div class="group-label bg-group-label">{m.appearance_group_window()}</div>
@@ -654,6 +786,53 @@
 
   .bg-file.custom {
     color: var(--color-accent);
+  }
+
+  .pool {
+    list-style: none;
+    margin: 0;
+    padding: 2px 20px 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  .pool-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 4px 2px 8px;
+    border-radius: 10px;
+    background: var(--color-hover);
+    font-size: 0.7rem;
+    max-width: 100%;
+  }
+
+  .pool-name {
+    font-family: monospace;
+    color: var(--color-foreground-darker, var(--color-foreground));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 170px;
+  }
+
+  .pool-remove {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--color-foreground-darker, var(--color-foreground));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .pool-remove:hover {
+    color: var(--color-foreground);
   }
 
   .clock-row {

@@ -189,6 +189,18 @@ const MIGRATION_14: &str = "
     INSERT INTO schema_version VALUES (14);
 ";
 
+/// Seeds the font choices.
+///
+/// Empty means the bundled faces, so an upgrade keeps the typography it had.
+/// Two settings rather than one: the timer's digits want a face whose figures
+/// are all the same width, or the time jitters sideways every second, and that
+/// is a different requirement from the rest of the interface.
+const MIGRATION_15: &str = "
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('font_ui', '');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('font_digits', '');
+    INSERT INTO schema_version VALUES (15);
+";
+
 /// Apply any pending migrations. Each migration is wrapped in a transaction
 /// so a partial failure leaves the database unchanged.
 pub fn run(conn: &Connection) -> Result<()> {
@@ -278,6 +290,12 @@ pub fn run(conn: &Connection) -> Result<()> {
         log::info!("[db/migrations] MIGRATION_14 complete");
     }
 
+    if version < 15 {
+        log::info!("[db/migrations] applying MIGRATION_15: seed font choices");
+        conn.execute_batch(&format!("BEGIN; {MIGRATION_15} COMMIT;"))?;
+        log::info!("[db/migrations] MIGRATION_15 complete");
+    }
+
     Ok(())
 }
 
@@ -313,7 +331,7 @@ mod tests {
         let v: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 14);
+        assert_eq!(v, 15);
     }
 
     #[test]

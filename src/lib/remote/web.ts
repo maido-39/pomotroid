@@ -13,6 +13,7 @@ import type {
   Theme,
   CustomAudioInfo,
   BackgroundInfo,
+  FontFace,
   FramingChange,
   DetailedStats,
   HeatmapStats,
@@ -431,6 +432,22 @@ export const setCustomBackgroundBytes = (name: string, dataB64: string) =>
 export const clearCustomBackground = () => ok({ type: 'clearBackground' });
 export const openImageFilePicker = async (): Promise<string | null> => null;
 export const openFolderPicker = async (): Promise<string | null> => null;
+export const openFontFilePicker = async (): Promise<string | null> => null;
+
+// Fonts are files on the machine running the app. The browser build is a view
+// onto a desktop, not an install of its own, so it has none to offer and
+// nothing to install them into.
+export const listFonts = async (): Promise<string[]> => [];
+export const addFont = async (_srcPath: string): Promise<string> => {
+  throw new Error('fonts cannot be added from the browser build');
+};
+export const addFontBytes = async (_name: string, _dataB64: string): Promise<string> => {
+  throw new Error('fonts cannot be added from the browser build');
+};
+export const removeFont = async (_name: string): Promise<Settings> => {
+  throw new Error('fonts cannot be removed from the browser build');
+};
+export const getFontFace = async (_name: string): Promise<FontFace | null> => null;
 export const nextBackground = () => ok({ type: 'nextBackground' });
 
 export const openLogDir = async () => {};
@@ -477,6 +494,7 @@ export const onSessionsChanged = sub<void>('sessions:changed');
 export const onAudioChanged = sub<string>('audio:changed');
 export const onBackgroundChanged = sub<void>('background:changed');
 export const onBackgroundFraming = sub<FramingChange>('background:framing');
+export const onFontsChanged = sub<void>('fonts:changed');
 export const onRemoteStatus = sub<RemoteStatus>('remote:status');
 export const onWebsocketClients = sub<{ connected: number; authed: number }>('websocket:clients');
 export const onAudioUnlocked = sub<void>('web:audio-unlocked');

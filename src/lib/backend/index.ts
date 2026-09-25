@@ -52,6 +52,14 @@ export const clearCustomBackground = b.clearCustomBackground;
 export const setBackgroundFraming = b.setBackgroundFraming;
 export const resetBackgroundFraming = b.resetBackgroundFraming;
 export const nextBackground = b.nextBackground;
+
+// Fonts
+export const listFonts = b.listFonts;
+export const addFont = b.addFont;
+export const addFontBytes = b.addFontBytes;
+export const removeFont = b.removeFont;
+export const getFontFace = b.getFontFace;
+export const openFontFilePicker = b.openFontFilePicker;
 export const openFolderPicker = b.openFolderPicker;
 export const openImageFilePicker = b.openImageFilePicker;
 
@@ -93,6 +101,7 @@ export const onSessionsChanged = b.onSessionsChanged;
 export const onAudioChanged = b.onAudioChanged;
 export const onBackgroundChanged = b.onBackgroundChanged;
 export const onBackgroundFraming = b.onBackgroundFraming;
+export const onFontsChanged = b.onFontsChanged;
 export const onRemoteStatus = b.onRemoteStatus;
 export const onWebsocketClients = b.onWebsocketClients;
 

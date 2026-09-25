@@ -46,6 +46,13 @@
   --transition-snappy: 0.12s cubic-bezier(0.4, 0, 0.2, 1);
   --transition-slow: 0.35s ease;
 
+  /* Typography. Both default to the bundled faces and are replaced at runtime
+     when the user adds a font; the fallback travels with the value so a face
+     that fails to parse lands back on the bundled one rather than on whatever
+     the platform picks. */
+  --font-ui: 'Mona Sans', system-ui, sans-serif;
+  --font-digits: 'Mona Sans Mono', ui-monospace, monospace;
+
   /* Optical sizing — adapts letterforms to font-size automatically */
   font-optical-sizing: auto;
 }
@@ -66,7 +73,7 @@ body {
   /* Keep content clear of notches / gesture bars on phones. */
   padding-top: env(safe-area-inset-top, 0px);
   padding-bottom: env(safe-area-inset-bottom, 0px);
-  font-family: 'Mona Sans', system-ui, sans-serif;
+  font-family: var(--font-ui, 'Mona Sans', system-ui, sans-serif);
   color: var(--color-foreground);
   user-select: none;
 }

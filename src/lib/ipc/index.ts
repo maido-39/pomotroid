@@ -11,6 +11,7 @@ import type {
   CustomAudioInfo,
   AudioCueKey,
   BackgroundInfo,
+  FontFace,
   FramingChange,
   RemoteStatus,
   PairingTarget,
@@ -123,6 +124,35 @@ export const openImageFilePicker = (): Promise<string | null> =>
     multiple: false,
     filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }],
   }) as Promise<string | null>;
+
+// --- Font commands ---
+
+/** Names of every font the user has added. */
+export const listFonts = () => invoke<string[]>('fonts_list');
+
+/** Copy a font file into the app. Returns the stored name. */
+export const addFont = (srcPath: string) => invoke<string>('fonts_add', { srcPath });
+
+/** Store a font from bytes (Android, where the picker returns a content:// URI). */
+export const addFontBytes = (name: string, dataB64: string) =>
+  invoke<string>('fonts_add_bytes', { name, dataB64 });
+
+/** Delete a font. Returns the settings, since a choice pointing at it is cleared. */
+export const removeFont = (name: string) => invoke<Settings>('fonts_remove', { name });
+
+/** One font's bytes, for the `@font-face` rule. */
+export const getFontFace = (name: string) => invoke<FontFace | null>('fonts_get', { name });
+
+/** Open a native file picker filtered to font formats. */
+export const openFontFilePicker = (): Promise<string | null> =>
+  dialogOpen({
+    multiple: false,
+    filters: [{ name: 'Fonts', extensions: ['ttf', 'otf', 'woff', 'woff2'] }],
+  }) as Promise<string | null>;
+
+/** Fired after a font is added or removed. */
+export const onFontsChanged = (cb: () => void): Promise<UnlistenFn> =>
+  listen<void>('fonts:changed', () => cb());
 
 // --- Diagnostic log commands ---
 

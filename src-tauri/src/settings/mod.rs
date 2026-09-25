@@ -38,6 +38,12 @@ pub struct Settings {
     /// How the timer is drawn: `dial`, `digital`, `edge`, `flip` or `analog`.
     /// An unknown value falls back to `dial` rather than drawing nothing.
     pub clock_style: String,
+    /// Added font used for the interface; empty means the bundled face.
+    pub font_ui: String,
+    /// Added font used for the timer's digits; empty means the bundled
+    /// monospaced face. Separate from `font_ui` because figures that are not
+    /// all one width make the time jitter sideways once a second.
+    pub font_digits: String,
     pub theme_mode: String,
     pub theme_light: String,
     pub theme_dark: String,
@@ -139,6 +145,8 @@ impl Default for Settings {
             long_breaks_enabled: true,
             dial_countdown: true,
             clock_style: "dial".to_string(),
+            font_ui: String::new(),
+            font_digits: String::new(),
             theme_mode: "auto".to_string(),
             theme_light: "Pomotroid Light".to_string(),
             theme_dark: "Pomotroid".to_string(),
@@ -274,6 +282,8 @@ pub fn load(conn: &Connection) -> Result<Settings> {
             .filter(|v| CLOCK_STYLES.contains(&v.as_str()))
             .cloned()
             .unwrap_or(d.clock_style),
+        font_ui: map.get("font_ui").cloned().unwrap_or(d.font_ui),
+        font_digits: map.get("font_digits").cloned().unwrap_or(d.font_digits),
         theme_mode: map
             .get("theme_mode")
             .cloned()
