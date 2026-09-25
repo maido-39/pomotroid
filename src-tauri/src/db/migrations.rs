@@ -178,6 +178,17 @@ const MIGRATION_13: &str = "
     INSERT INTO schema_version VALUES (13);
 ";
 
+/// Seeds the clock style.
+///
+/// The ring everyone has been looking at, so an upgrade changes nothing about
+/// how the timer looks. The other styles exist because the ring is the one
+/// shape that fights a background image: it draws a hard circle across the
+/// middle of the picture.
+const MIGRATION_14: &str = "
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('clock_style', 'dial');
+    INSERT INTO schema_version VALUES (14);
+";
+
 /// Apply any pending migrations. Each migration is wrapped in a transaction
 /// so a partial failure leaves the database unchanged.
 pub fn run(conn: &Connection) -> Result<()> {
@@ -261,6 +272,12 @@ pub fn run(conn: &Connection) -> Result<()> {
         log::info!("[db/migrations] MIGRATION_13 complete");
     }
 
+    if version < 14 {
+        log::info!("[db/migrations] applying MIGRATION_14: seed clock style");
+        conn.execute_batch(&format!("BEGIN; {MIGRATION_14} COMMIT;"))?;
+        log::info!("[db/migrations] MIGRATION_14 complete");
+    }
+
     Ok(())
 }
 
@@ -296,7 +313,7 @@ mod tests {
         let v: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 13);
+        assert_eq!(v, 14);
     }
 
     #[test]

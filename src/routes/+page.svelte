@@ -4,6 +4,7 @@
   import Titlebar from '$lib/components/Titlebar.svelte';
   import Timer from '$lib/components/Timer.svelte';
   import Backdrop from '$lib/components/Backdrop.svelte';
+  import ClockEdgeRing from '$lib/components/clock/ClockEdgeRing.svelte';
   import {
     getSettings,
     getThemes,
@@ -201,6 +202,9 @@
 
 <div class="app">
   <Backdrop />
+  {#if $settings.clock_style === 'edge'}
+    <ClockEdgeRing />
+  {/if}
   <Titlebar />
   <!-- Double-click anywhere that is not a control to change the picture by
        hand. `ondblclick` on the region rather than on the backdrop: the
@@ -222,8 +226,12 @@
     animation: app-fade-in 0.4s var(--transition-slow) both;
   }
 
-  /* Keep the chrome above the backdrop layer. */
-  .app > :global(:not(.backdrop)) {
+  /* Keep the chrome above the backdrop layer. The two full-window overlays are
+     excluded because they place themselves: the backdrop sits under everything,
+     and the edge clock's progress line sits over everything. This selector is
+     more specific than their own rules, so leaving them in silently turned
+     both into ordinary flex children. */
+  .app > :global(:not(.backdrop, .ring)) {
     position: relative;
     z-index: 1;
   }

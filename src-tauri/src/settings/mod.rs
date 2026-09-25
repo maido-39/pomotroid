@@ -4,6 +4,10 @@ use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// The clock styles the frontend knows how to draw. A value outside this list
+/// is ignored on load, so a hand-edited database cannot leave the timer blank.
+pub const CLOCK_STYLES: &[&str] = &["dial", "digital", "edge", "flip", "analog"];
+
 /// All user-configurable settings, fully typed.
 ///
 /// Time fields are in **seconds** (converted from stored minutes).
@@ -31,6 +35,9 @@ pub struct Settings {
     pub long_breaks_enabled: bool,
     /// When true the dial arc starts full and subtracts; when false it fills from empty.
     pub dial_countdown: bool,
+    /// How the timer is drawn: `dial`, `digital`, `edge`, `flip` or `analog`.
+    /// An unknown value falls back to `dial` rather than drawing nothing.
+    pub clock_style: String,
     pub theme_mode: String,
     pub theme_light: String,
     pub theme_dark: String,
@@ -131,6 +138,7 @@ impl Default for Settings {
             short_breaks_enabled: true,
             long_breaks_enabled: true,
             dial_countdown: true,
+            clock_style: "dial".to_string(),
             theme_mode: "auto".to_string(),
             theme_light: "Pomotroid Light".to_string(),
             theme_dark: "Pomotroid".to_string(),
@@ -261,6 +269,11 @@ pub fn load(conn: &Connection) -> Result<Settings> {
         short_breaks_enabled: parse_bool(&map, "short_breaks_enabled", d.short_breaks_enabled),
         long_breaks_enabled: parse_bool(&map, "long_breaks_enabled", d.long_breaks_enabled),
         dial_countdown: parse_bool(&map, "dial_countdown", d.dial_countdown),
+        clock_style: map
+            .get("clock_style")
+            .filter(|v| CLOCK_STYLES.contains(&v.as_str()))
+            .cloned()
+            .unwrap_or(d.clock_style),
         theme_mode: map
             .get("theme_mode")
             .cloned()
@@ -543,6 +556,20 @@ mod tests {
             [], |r| r.get(0),
         ).unwrap();
         assert_eq!(old_count, 0, "old duration keys must be absent after MIGRATION_2");
+    }
+
+    #[test]
+    fn an_unknown_clock_style_falls_back_to_the_dial() {
+        let conn = setup();
+        seed_defaults(&conn).unwrap();
+        assert_eq!(load(&conn).unwrap().clock_style, "dial");
+
+        save_setting(&conn, "clock_style", "flip").unwrap();
+        assert_eq!(load(&conn).unwrap().clock_style, "flip");
+
+        // A style the frontend cannot draw must not leave the timer blank.
+        save_setting(&conn, "clock_style", "hologram").unwrap();
+        assert_eq!(load(&conn).unwrap().clock_style, "dial");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 <script lang="ts">
   // Orchestrator component. Subscribes to timer events, owns keyboard listener,
-  // and renders TimerDial + TimerDisplay + TimerFooter.
+  // and renders the clock (in the chosen style) + controls + TimerFooter.
   import { onMount } from 'svelte';
   import {
     timerToggle,
@@ -16,8 +16,7 @@
   import { timerState } from '$lib/stores/timer';
   import { settings } from '$lib/stores/settings';
   import { fade } from 'svelte/transition';
-  import TimerDial from './TimerDial.svelte';
-  import TimerDisplay from './TimerDisplay.svelte';
+  import Clock from './clock/Clock.svelte';
   import TimerFooter from './TimerFooter.svelte';
   import MiniControls from './MiniControls.svelte';
   import Tooltip from './Tooltip.svelte';
@@ -115,15 +114,12 @@
 
 <div class="timer-outer" class:compact={isCompact}>
   <div class="timer" style="zoom: {uiScale}">
-    <!-- Dial + display stacked (display centered over dial) -->
-    <div class="dial-stack">
-      <TimerDial snap={state} countdown={$settings.dial_countdown} />
-      <TimerDisplay {state} />
-    </div>
+    <!-- The clock, in whichever style the settings ask for. -->
+    <Clock snap={state} compact={isCompact} />
 
     {#if !isCompact}
-      <!-- Round type label sits below the dial as a normal flex child so it
-           does not affect the dial-stack height used to centre TimerDisplay. -->
+      <!-- Round type label sits below the clock as a normal flex child, so it
+           cannot affect the height the dial style centres its digits in. -->
       <div class="round-label" style="color: {roundColor(state.round_type)}">
         {roundLabel(state.round_type)}
       </div>
@@ -194,13 +190,6 @@
     flex-direction: column;
     align-items: center;
     gap: 16px;
-  }
-
-  .dial-stack {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
   }
 
   .controls-wrapper {

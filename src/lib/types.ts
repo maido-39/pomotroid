@@ -66,6 +66,8 @@ export interface Settings {
   theme_light: string;
   theme_dark: string;
   dial_countdown: boolean;
+  /** How the timer is drawn: 'dial' | 'digital' | 'edge' | 'flip' | 'analog'. */
+  clock_style: string;
   language: string; // 'auto' | 'en' | 'es' | 'fr' | 'de' | 'ja'
   verbose_logging: boolean;
   check_for_updates: boolean;

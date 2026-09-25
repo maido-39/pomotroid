@@ -17,6 +17,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("notifications", "false"),
     ("work_rounds", "4"),
     ("dial_countdown", "true"),
+    ("clock_style", "dial"),
     ("theme_mode", "auto"),
     ("theme_light", "Pomotroid Light"),
     ("theme_dark", "Pomotroid"),

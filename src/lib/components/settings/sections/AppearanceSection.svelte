@@ -30,6 +30,24 @@
   import { readPickedFileAsBase64 } from '$lib/utils/files';
   import { error as logError, warn } from '$lib/utils/log';
 
+  // The styles the clock can be drawn in. Kept in the same order the settings
+  // dropdown shows them, with the ring first because it is the default.
+  const CLOCK_STYLES = [
+    { id: 'dial', label: () => m.appearance_clock_dial() },
+    { id: 'digital', label: () => m.appearance_clock_digital() },
+    { id: 'edge', label: () => m.appearance_clock_edge() },
+    { id: 'flip', label: () => m.appearance_clock_flip() },
+    { id: 'analog', label: () => m.appearance_clock_analog() },
+  ];
+
+  async function chooseClockStyle(id: string) {
+    try {
+      settings.set(await setSetting('clock_style', id));
+    } catch (err) {
+      await logError(`[appearance] failed to set the clock style: ${err}`);
+    }
+  }
+
   // --- Background image ---
   let bgName = $state<string | null>(null);
   let bgDataUrl = $state<string | null>(null);
@@ -463,6 +481,23 @@
     {/if}
   </div>
 
+  <!-- How the timer is drawn -->
+  <div class="group-label bg-group-label">{m.appearance_group_clock()}</div>
+  <div class="clock-row">
+    <label class="clock-label" for="clock-style">{m.appearance_clock_style()}</label>
+    <select
+      id="clock-style"
+      class="clock-select"
+      value={$settings.clock_style}
+      onchange={(e) => chooseClockStyle((e.currentTarget as HTMLSelectElement).value)}
+    >
+      {#each CLOCK_STYLES as style (style.id)}
+        <option value={style.id}>{style.label()}</option>
+      {/each}
+    </select>
+  </div>
+  <p class="bg-hint">{m.appearance_clock_style_desc()}</p>
+
   <!-- Window translucency (Win32 layered window) -->
   {#if isWindows && !isMobile}
     <div class="group-label bg-group-label">{m.appearance_group_window()}</div>
@@ -619,6 +654,30 @@
 
   .bg-file.custom {
     color: var(--color-accent);
+  }
+
+  .clock-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 20px 2px;
+  }
+
+  .clock-label {
+    font-size: 0.82rem;
+    color: var(--color-foreground);
+  }
+
+  .clock-select {
+    font-family: inherit;
+    font-size: 0.78rem;
+    color: var(--color-foreground);
+    background: var(--color-background-light, var(--color-background));
+    border: 1px solid var(--color-separator);
+    border-radius: 4px;
+    padding: 3px 6px;
+    max-width: 190px;
   }
 
   .bg-count {
