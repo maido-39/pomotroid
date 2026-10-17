@@ -75,7 +75,7 @@
       "nsis": {
         "displayLanguageSelector": false,
         "installerIcon": "icons/icon.ico",
-        "headerImage": "icons/128x128.png",
+        "headerImage": "icons/nsis-header.bmp",
         "installMode": "perMachine"
       },
       "wix": {
