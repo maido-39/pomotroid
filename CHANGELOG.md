@@ -29,6 +29,10 @@
 - **Portable mode** — a `data` folder beside the executable keeps settings, images, sounds, fonts and logs there instead.
 - **Launch at login** — optional, off by default.
 
+### Localization
+
+- **Every new setting is translated** — all of the above is available in Spanish, French, German, Japanese, Chinese (Simplified), Turkish and Portuguese, not only English.
+
 ### Bug Fixes
 
 - **Always on top left off after a reset** — resetting the timer during a break could leave the window behind others with nothing to bring it back. The rule now lives in one place and is applied on every transition, including reset.
