@@ -421,6 +421,80 @@ pub fn themes_list(app: AppHandle) -> Result<Vec<Theme>, String> {
     themes_list_impl(&app)
 }
 
+/// Save a user theme and return the updated list.
+pub fn themes_save_impl(
+    app: &AppHandle,
+    name: &str,
+    colors: &std::collections::HashMap<String, String>,
+) -> Result<Vec<Theme>, String> {
+    let data_dir = crate::paths::data_dir(app)?;
+    let saved = themes::save_custom(&data_dir.join("themes"), name, colors)?;
+    log::info!("[themes] saved '{}'", saved.name);
+    let list = themes::list_all(&data_dir);
+    // The desktop's file watcher would announce this too, but not on Android,
+    // and not before this call returns.
+    app.emit("themes:changed", &list).ok();
+    Ok(list)
+}
+
+/// Delete a user theme and return the updated list.
+///
+/// If the deleted theme was in use and nothing of that name is left — it was
+/// purely custom, not an override of a built-in — the selection goes back to
+/// the default so the app is never told to use a theme that does not exist.
+pub fn themes_delete_impl(app: &AppHandle, name: &str) -> Result<Vec<Theme>, String> {
+    let data_dir = crate::paths::data_dir(app)?;
+    themes::delete_custom(&data_dir.join("themes"), name)?;
+    log::info!("[themes] deleted '{name}'");
+    let list = themes::list_all(&data_dir);
+    let still_exists = |n: &str| list.iter().any(|t| t.name.eq_ignore_ascii_case(n));
+
+    let defaults = settings::Settings::default();
+    let mut changed = None;
+    {
+        let db = app.state::<DbState>();
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        for (key, fallback) in [("theme_dark", &defaults.theme_dark), ("theme_light", &defaults.theme_light)] {
+            let current = settings::get_setting(&conn, key).unwrap_or_default();
+            if current.eq_ignore_ascii_case(name) && !still_exists(&current) {
+                settings::save_setting(&conn, key, fallback).map_err(|e| e.to_string())?;
+                changed = Some(());
+            }
+        }
+        if changed.is_some() {
+            let updated = settings::load(&conn).map_err(|e| e.to_string())?;
+            app.emit("settings:changed", &updated).ok();
+        }
+    }
+    app.emit("themes:changed", &list).ok();
+    Ok(list)
+}
+
+/// Save a user theme. A name a built-in already uses customises that built-in.
+#[tauri::command]
+pub fn themes_save(
+    app: AppHandle,
+    name: String,
+    colors: std::collections::HashMap<String, String>,
+) -> Result<Vec<Theme>, String> {
+    if let Some(r) = remote::forward::<Vec<Theme>>(
+        &app,
+        json!({ "type": "saveTheme", "name": name, "colors": colors }),
+    ) {
+        return r;
+    }
+    themes_save_impl(&app, &name, &colors)
+}
+
+/// Delete a user theme. Deleting an override brings the built-in back.
+#[tauri::command]
+pub fn themes_delete(app: AppHandle, name: String) -> Result<Vec<Theme>, String> {
+    if let Some(r) = remote::forward::<Vec<Theme>>(&app, json!({ "type": "deleteTheme", "name": name })) {
+        return r;
+    }
+    themes_delete_impl(&app, &name)
+}
+
 // ---------------------------------------------------------------------------
 // CMD-04 — Sessions commands
 // ---------------------------------------------------------------------------

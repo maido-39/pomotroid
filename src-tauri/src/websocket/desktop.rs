@@ -54,6 +54,12 @@ pub trait Backend: Send + Sync {
     fn set_setting(&self, key: &str, value: &str) -> Result<Settings, String>;
     fn reset_settings(&self) -> Result<Settings, String>;
     fn get_themes(&self) -> Result<Vec<Theme>, String>;
+    fn save_theme(
+        &self,
+        name: &str,
+        colors: &std::collections::HashMap<String, String>,
+    ) -> Result<Vec<Theme>, String>;
+    fn delete_theme(&self, name: &str) -> Result<Vec<Theme>, String>;
     fn get_stats(&self, kind: &str) -> Result<Value, String>;
     fn clear_sessions(&self) -> Result<(), String>;
     fn get_background(&self) -> Result<Option<BlobPayload>, String>;
@@ -110,6 +116,18 @@ impl Backend for AppBackend {
 
     fn get_themes(&self) -> Result<Vec<Theme>, String> {
         commands::themes_list_impl(&self.app)
+    }
+
+    fn save_theme(
+        &self,
+        name: &str,
+        colors: &std::collections::HashMap<String, String>,
+    ) -> Result<Vec<Theme>, String> {
+        commands::themes_save_impl(&self.app, name, colors)
+    }
+
+    fn delete_theme(&self, name: &str) -> Result<Vec<Theme>, String> {
+        commands::themes_delete_impl(&self.app, name)
     }
 
     fn get_stats(&self, kind: &str) -> Result<Value, String> {
@@ -628,6 +646,21 @@ pub fn handle_client_message(text: &str, backend: &dyn Backend, ctx: &ConnCtx) -
             }
             "resetSettings" => reply("settings", id, Some(json!(backend.reset_settings()?))),
             "getThemes" => reply("themes", id, Some(json!(backend.get_themes()?))),
+            "saveTheme" => {
+                let name = str_field(&msg, "name")?;
+                let colors: std::collections::HashMap<String, String> = msg
+                    .get("colors")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(|e| format!("invalid colors: {e}"))?
+                    .ok_or("missing colors")?;
+                reply("themes", id, Some(json!(backend.save_theme(name, &colors)?)))
+            }
+            "deleteTheme" => {
+                let name = str_field(&msg, "name")?;
+                reply("themes", id, Some(json!(backend.delete_theme(name)?)))
+            }
             "getStats" => {
                 let kind_s = msg.get("kind").and_then(|k| k.as_str()).unwrap_or("detailed");
                 let mut r: Value = serde_json::from_str(&reply("stats", id, Some(backend.get_stats(kind_s)?)))
@@ -1006,6 +1039,18 @@ mod tests {
         fn get_themes(&self) -> Result<Vec<Theme>, String> {
             Ok(vec![Theme { name: "Nord".into(), colors: Default::default(), is_custom: false }])
         }
+        fn save_theme(
+            &self,
+            name: &str,
+            colors: &std::collections::HashMap<String, String>,
+        ) -> Result<Vec<Theme>, String> {
+            self.calls.lock().unwrap().push(format!("theme:save:{name}:{}", colors.len()));
+            Ok(Vec::new())
+        }
+        fn delete_theme(&self, name: &str) -> Result<Vec<Theme>, String> {
+            self.calls.lock().unwrap().push(format!("theme:delete:{name}"));
+            Ok(Vec::new())
+        }
         fn get_stats(&self, kind: &str) -> Result<Value, String> {
             Ok(json!({ "kind": kind, "rounds": 3 }))
         }
@@ -1174,6 +1219,16 @@ mod tests {
     fn themes_stats_and_sessions() {
         let b = MockBackend::default();
         let c = authed(&b);
+        let v = parse(handle_client_message(
+            r##"{"type":"saveTheme","name":"Dusk","colors":{"--color-accent":"#ff8800"}}"##,
+            &b,
+            &c,
+        ));
+        assert_eq!(v["type"], "themes", "a paired phone can save a theme on the desktop");
+        let v = parse(handle_client_message(r#"{"type":"saveTheme","name":"Dusk"}"#, &b, &c));
+        assert_eq!(v["type"], "error", "colors are required");
+        let v = parse(handle_client_message(r#"{"type":"deleteTheme","name":"Dusk"}"#, &b, &c));
+        assert_eq!(v["type"], "themes");
         let v = parse(handle_client_message(r#"{"type":"getThemes"}"#, &b, &c));
         assert_eq!(v["payload"][0]["name"], "Nord");
 

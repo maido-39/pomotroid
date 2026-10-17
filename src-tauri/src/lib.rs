@@ -40,6 +40,8 @@ use commands::{
     sessions_clear,
     stats_get_detailed, stats_get_heatmap,
     themes_list,
+    themes_save,
+    themes_delete,
     timer_get_state, timer_reset, timer_restart_round, timer_skip, timer_toggle,
     websocket_interfaces, websocket_pairing_info, websocket_regenerate_token,
     window_set_visibility,
@@ -306,6 +308,8 @@ pub fn run() {
             settings_reset_defaults,
             // Themes
             themes_list,
+            themes_save,
+            themes_delete,
             // Sessions
             sessions_clear,
             // Stats

@@ -8,6 +8,75 @@ use std::collections::HashMap;
 /// is ignored on load, so a hand-edited database cannot leave the timer blank.
 pub const CLOCK_STYLES: &[&str] = &["dial", "digital", "edge", "flip", "analog"];
 
+/// The parts of the timer a user can move or hide. The clock is not among
+/// them: it is the point of the window and always shows.
+pub const LAYOUT_ELEMENTS: &[&str] = &["label", "controls", "footer"];
+
+/// Where each movable part of the timer sits.
+///
+/// Every element lives in exactly one of three lanes — above the clock, below
+/// it, or hidden — and the order inside a lane is the order on screen. Stored as
+/// JSON in one settings row so a layout is written, and broadcast, as a whole.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Layout {
+    #[serde(default)]
+    pub above: Vec<String>,
+    #[serde(default)]
+    pub below: Vec<String>,
+    #[serde(default)]
+    pub hidden: Vec<String>,
+}
+
+impl Default for Layout {
+    /// The arrangement the app has always had: everything under the clock.
+    fn default() -> Self {
+        Self {
+            above: Vec::new(),
+            below: LAYOUT_ELEMENTS.iter().map(|s| s.to_string()).collect(),
+            hidden: Vec::new(),
+        }
+    }
+}
+
+impl Layout {
+    /// A layout that is safe to draw, whatever was stored.
+    ///
+    /// Unknown names are dropped, a name that appears twice keeps its first
+    /// place, and an element missing from every lane goes back below the
+    /// clock. That last rule is the one that matters: a layout saved before an
+    /// element existed must not make the new element silently vanish.
+    pub fn normalized(self) -> Self {
+        let mut seen: Vec<String> = Vec::new();
+        let mut keep = |lane: Vec<String>| -> Vec<String> {
+            lane.into_iter()
+                .filter(|e| LAYOUT_ELEMENTS.contains(&e.as_str()))
+                .filter(|e| {
+                    if seen.contains(e) {
+                        false
+                    } else {
+                        seen.push(e.clone());
+                        true
+                    }
+                })
+                .collect()
+        };
+        let above = keep(self.above);
+        let mut below = keep(self.below);
+        let hidden = keep(self.hidden);
+        for e in LAYOUT_ELEMENTS {
+            if !seen.iter().any(|s| s == e) {
+                below.push(e.to_string());
+            }
+        }
+        Self { above, below, hidden }
+    }
+
+    /// Read a stored layout; anything unreadable is the default layout.
+    pub fn parse(raw: &str) -> Self {
+        serde_json::from_str::<Layout>(raw).map(Layout::normalized).unwrap_or_default()
+    }
+}
+
 /// All user-configurable settings, fully typed.
 ///
 /// Time fields are in **seconds** (converted from stored minutes).
@@ -44,6 +113,8 @@ pub struct Settings {
     /// monospaced face. Separate from `font_ui` because figures that are not
     /// all one width make the time jitter sideways once a second.
     pub font_digits: String,
+    /// Where the label, the controls and the footer sit around the clock.
+    pub layout: Layout,
     pub theme_mode: String,
     pub theme_light: String,
     pub theme_dark: String,
@@ -147,6 +218,7 @@ impl Default for Settings {
             clock_style: "dial".to_string(),
             font_ui: String::new(),
             font_digits: String::new(),
+            layout: Layout::default(),
             theme_mode: "auto".to_string(),
             theme_light: "Pomotroid Light".to_string(),
             theme_dark: "Pomotroid".to_string(),
@@ -284,6 +356,7 @@ pub fn load(conn: &Connection) -> Result<Settings> {
             .unwrap_or(d.clock_style),
         font_ui: map.get("font_ui").cloned().unwrap_or(d.font_ui),
         font_digits: map.get("font_digits").cloned().unwrap_or(d.font_digits),
+        layout: map.get("layout").map(|raw| Layout::parse(raw)).unwrap_or(d.layout),
         theme_mode: map
             .get("theme_mode")
             .cloned()
@@ -566,6 +639,46 @@ mod tests {
             [], |r| r.get(0),
         ).unwrap();
         assert_eq!(old_count, 0, "old duration keys must be absent after MIGRATION_2");
+    }
+
+    #[test]
+    fn the_default_layout_is_the_arrangement_the_app_always_had() {
+        let conn = setup();
+        seed_defaults(&conn).unwrap();
+        assert_eq!(load(&conn).unwrap().layout, Layout::default());
+        assert_eq!(Layout::default().below, vec!["label", "controls", "footer"]);
+    }
+
+    #[test]
+    fn a_stored_layout_is_read_back() {
+        let conn = setup();
+        seed_defaults(&conn).unwrap();
+        save_setting(&conn, "layout", r#"{"above":["label"],"below":["controls"],"hidden":["footer"]}"#)
+            .unwrap();
+        let l = load(&conn).unwrap().layout;
+        assert_eq!(l.above, vec!["label"]);
+        assert_eq!(l.below, vec!["controls"]);
+        assert_eq!(l.hidden, vec!["footer"]);
+    }
+
+    #[test]
+    fn a_layout_cannot_lose_or_duplicate_an_element() {
+        // Unknown names go, a duplicate keeps its first place, and anything
+        // missing comes back below the clock.
+        let l = Layout::parse(r#"{"above":["label","bogus"],"below":["label"],"hidden":[]}"#);
+        assert_eq!(l.above, vec!["label"]);
+        assert_eq!(l.below, vec!["controls", "footer"], "missing elements return, in their usual order");
+        assert!(l.hidden.is_empty());
+
+        let total = l.above.len() + l.below.len() + l.hidden.len();
+        assert_eq!(total, LAYOUT_ELEMENTS.len(), "every element exactly once");
+    }
+
+    #[test]
+    fn an_unreadable_layout_is_the_default() {
+        assert_eq!(Layout::parse("not json"), Layout::default());
+        assert_eq!(Layout::parse(""), Layout::default());
+        assert_eq!(Layout::parse("{}"), Layout::default(), "an empty object fills in");
     }
 
     #[test]

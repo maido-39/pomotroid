@@ -20,11 +20,20 @@
   import ShortcutsSection from '$lib/components/settings/sections/ShortcutsSection.svelte';
   import SystemSection from '$lib/components/settings/sections/SystemSection.svelte';
   import AboutSection from '$lib/components/settings/sections/AboutSection.svelte';
+  import CustomizeSection from '$lib/components/settings/sections/CustomizeSection.svelte';
   import ConnectSection from '$lib/components/settings/sections/ConnectSection.svelte';
 
   import * as m from '$paraglide/messages.js';
 
-  type Section = 'connect' | 'timer' | 'appearance' | 'notifications' | 'shortcuts' | 'system' | 'about';
+  type Section =
+    | 'connect'
+    | 'timer'
+    | 'appearance'
+    | 'customize'
+    | 'notifications'
+    | 'shortcuts'
+    | 'system'
+    | 'about';
 
   // Mobile and the browser build get a "Desktop" (pairing) section first and
   // no global-shortcut section (there is no OS-level hotkey support there).
@@ -32,6 +41,7 @@
     ...(useInAppNav ? [{ id: 'connect' as Section, label: m.nav_connect }] : []),
     { id: 'timer', label: m.nav_timer },
     { id: 'appearance', label: m.nav_appearance },
+    { id: 'customize', label: m.nav_customize },
     { id: 'notifications', label: m.nav_notifications },
     ...(useInAppNav ? [] : [{ id: 'shortcuts' as Section, label: m.nav_shortcuts }]),
     { id: 'system', label: m.nav_system },
@@ -168,6 +178,8 @@
         <TimerSection />
       {:else if active === 'appearance'}
         <AppearanceSection />
+      {:else if active === 'customize'}
+        <CustomizeSection />
       {:else if active === 'notifications'}
         <NotificationsSection />
       {:else if active === 'shortcuts'}

@@ -438,6 +438,16 @@ export const openFontFilePicker = async (): Promise<string | null> => null;
 // onto a desktop, not an install of its own, so it has none to offer and
 // nothing to install them into.
 export const listFonts = async (): Promise<string[]> => [];
+
+// Themes are saved on the desktop, like every other setting. The live preview
+// is a window-to-window broadcast inside one install, which a browser tab
+// connected over the network is not part of, so it applies to this tab only.
+export const saveTheme = (name: string, colors: Record<string, string>) =>
+  payload<Theme[]>({ type: 'saveTheme', name, colors });
+export const deleteTheme = (name: string) => payload<Theme[]>({ type: 'deleteTheme', name });
+export const broadcastThemePreview = async (colors: Record<string, string> | null) => {
+  emit('theme:preview', colors);
+};
 export const addFont = async (_srcPath: string): Promise<string> => {
   throw new Error('fonts cannot be added from the browser build');
 };
@@ -495,6 +505,7 @@ export const onAudioChanged = sub<string>('audio:changed');
 export const onBackgroundChanged = sub<void>('background:changed');
 export const onBackgroundFraming = sub<FramingChange>('background:framing');
 export const onFontsChanged = sub<void>('fonts:changed');
+export const onThemePreview = sub<Record<string, string> | null>('theme:preview');
 export const onRemoteStatus = sub<RemoteStatus>('remote:status');
 export const onWebsocketClients = sub<{ connected: number; authed: number }>('websocket:clients');
 export const onAudioUnlocked = sub<void>('web:audio-unlocked');

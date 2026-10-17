@@ -2,7 +2,7 @@
 // All backend communication goes through this module.
 
 import { invoke } from '@tauri-apps/api/core';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import type {
   TimerState,
@@ -124,6 +124,27 @@ export const openImageFilePicker = (): Promise<string | null> =>
     multiple: false,
     filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }],
   }) as Promise<string | null>;
+
+// --- Theme editing ---
+
+/** Save a user theme. A name a built-in already uses customises that built-in.
+ *  Returns the updated theme list. */
+export const saveTheme = (name: string, colors: Record<string, string>) =>
+  invoke<Theme[]>('themes_save', { name, colors });
+
+/** Delete a user theme. Deleting an override brings the built-in back. */
+export const deleteTheme = (name: string) => invoke<Theme[]>('themes_delete', { name });
+
+/** Show `colors` in every window without saving them, or `null` to go back to
+ *  the saved theme. Lets the theme editor be previewed on the real timer. */
+export const broadcastThemePreview = (colors: Record<string, string> | null) =>
+  emit('theme:preview', colors);
+
+/** Fired when the theme editor previews colours, or ends a preview with `null`. */
+export const onThemePreview = (
+  cb: (colors: Record<string, string> | null) => void
+): Promise<UnlistenFn> =>
+  listen<Record<string, string> | null>('theme:preview', (e) => cb(e.payload));
 
 // --- Font commands ---
 

@@ -56,6 +56,7 @@ const defaults: Settings = {
   clock_style: 'dial',
   font_ui: '',
   font_digits: '',
+  layout: { above: [], below: ['label', 'controls', 'footer'], hidden: [] },
   language: 'auto',
   verbose_logging: false,
   check_for_updates: true,

@@ -20,6 +20,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("clock_style", "dial"),
     ("font_ui", ""),
     ("font_digits", ""),
+    ("layout", r#"{"above":[],"below":["label","controls","footer"],"hidden":[]}"#),
     ("theme_mode", "auto"),
     ("theme_light", "Pomotroid Light"),
     ("theme_dark", "Pomotroid"),

@@ -72,6 +72,8 @@ export interface Settings {
   font_ui: string;
   /** Added font for the timer's digits; '' = the bundled monospaced face. */
   font_digits: string;
+  /** Where the label, the controls and the footer sit around the clock. */
+  layout: Layout;
   language: string; // 'auto' | 'en' | 'es' | 'fr' | 'de' | 'ja'
   verbose_logging: boolean;
   check_for_updates: boolean;
@@ -165,6 +167,14 @@ export interface BackgroundInfo extends Framing {
   data_url: string;
   /** Identity this image's framing is stored under. */
   key: string;
+}
+
+/** Where each movable part of the timer sits. Mirrors Rust `Layout`: every
+ *  element is in exactly one lane, and the order in a lane is the order on screen. */
+export interface Layout {
+  above: string[];
+  below: string[];
+  hidden: string[];
 }
 
 /** One added font, ready for an `@font-face` rule. Mirrors Rust `FontFace`. */

@@ -17,6 +17,7 @@
   import { settings } from '$lib/stores/settings';
   import { fade } from 'svelte/transition';
   import Clock from './clock/Clock.svelte';
+  import { DEFAULT_LAYOUT, groupsOf } from '$lib/utils/layout';
   import TimerFooter from './TimerFooter.svelte';
   import MiniControls from './MiniControls.svelte';
   import Tooltip from './Tooltip.svelte';
@@ -32,6 +33,13 @@
   let { isCompact = false, uiScale = 1 }: Props = $props();
 
   let state = $derived($timerState);
+
+  // Where the label, the controls and the footer sit. The backend has already
+  // made the layout safe — every element in exactly one lane — so this only
+  // has to draw it.
+  const layout = $derived($settings.layout ?? DEFAULT_LAYOUT);
+  const aboveGroups = $derived(groupsOf(layout.above));
+  const belowGroups = $derived(groupsOf(layout.below));
 
   function roundColor(rt: string): string {
     if (rt === 'work') return 'var(--color-focus-round)';
@@ -112,62 +120,94 @@
   });
 </script>
 
+<!-- The three transport buttons. A snippet so a lane can draw them alone or
+     share a grid with the footer. -->
+{#snippet transport()}
+    <!-- Back: restart current round -->
+    <Tooltip text={m.tooltip_restart_round()}>
+      <button class="btn-side" onclick={timerRestartRound} aria-label="Restart round">
+        <svg width="18" height="18" viewBox="0 0 16 16">
+          <polygon points="15,1 6,8 15,15" fill="currentColor" />
+          <rect x="1" y="1" width="3" height="14" rx="1" fill="currentColor" />
+        </svg>
+      </button>
+    </Tooltip>
+
+    <!-- Play / Pause — icon fades when state changes -->
+    <button
+      class="play-pause"
+      onclick={timerToggle}
+      aria-label={state.is_running ? 'Pause' : 'Play'}
+    >
+      {#key state.is_running}
+        <span class="icon" in:fade={{ duration: 120 }}>
+          {#if state.is_running}
+            <svg width="24" height="24" viewBox="0 0 24 24">
+              <rect x="5" y="3" width="5" height="18" rx="1.5" fill="currentColor" />
+              <rect x="14" y="3" width="5" height="18" rx="1.5" fill="currentColor" />
+            </svg>
+          {:else}
+            <svg width="18" height="18" viewBox="0 0 24 24" style="overflow: visible;">
+              <polygon points="4,0 28,12 4,24" fill="currentColor" />
+            </svg>
+          {/if}
+        </span>
+      {/key}
+    </button>
+
+    <!-- Skip: advance to next round -->
+    <Tooltip text={m.tooltip_skip()}>
+      <button class="btn-side" onclick={timerSkip} aria-label="Skip round">
+        <svg width="18" height="18" viewBox="0 0 16 16">
+          <polygon points="1,1 10,8 1,15" fill="currentColor" />
+          <rect x="12" y="1" width="3" height="14" rx="1" fill="currentColor" />
+        </svg>
+      </button>
+    </Tooltip>
+{/snippet}
+
+<!-- One run of a lane. The controls and the footer share a single grid when
+     they sit next to each other, exactly as they always have: their columns
+     line up because they are the same columns. Apart, each sizes to itself. -->
+{#snippet group(parts: string[])}
+  {#if parts[0] === 'label'}
+    <div class="round-label" style="color: {roundColor(state.round_type)}">
+      {roundLabel(state.round_type)}
+    </div>
+  {:else if parts[0] === 'controls'}
+    <div class="controls-wrapper">
+      {@render transport()}
+      {#if parts[1] === 'footer'}
+        <TimerFooter snap={state} />
+      {/if}
+    </div>
+  {:else if parts[0] === 'footer'}
+    <div class="controls-wrapper">
+      <TimerFooter snap={state} />
+    </div>
+  {/if}
+{/snippet}
+
 <div class="timer-outer" class:compact={isCompact}>
   <div class="timer" style="zoom: {uiScale}">
+    <!-- Compact mode keeps only the clock whatever the layout says: under
+         300px there is no room for the rest, and MiniControls stand in. -->
+    {#if !isCompact && aboveGroups.length}
+      <div class="lane">
+        {#each aboveGroups as g (g.key)}
+          {@render group(g.parts)}
+        {/each}
+      </div>
+    {/if}
+
     <!-- The clock, in whichever style the settings ask for. -->
     <Clock snap={state} compact={isCompact} />
 
-    {#if !isCompact}
-      <!-- Round type label sits below the clock as a normal flex child, so it
-           cannot affect the height the dial style centres its digits in. -->
-      <div class="round-label" style="color: {roundColor(state.round_type)}">
-        {roundLabel(state.round_type)}
-      </div>
-
-      <div class="controls-wrapper">
-        <!-- Back: restart current round -->
-        <Tooltip text={m.tooltip_restart_round()}>
-          <button class="btn-side" onclick={timerRestartRound} aria-label="Restart round">
-            <svg width="18" height="18" viewBox="0 0 16 16">
-              <polygon points="15,1 6,8 15,15" fill="currentColor" />
-              <rect x="1" y="1" width="3" height="14" rx="1" fill="currentColor" />
-            </svg>
-          </button>
-        </Tooltip>
-
-        <!-- Play / Pause — icon fades when state changes -->
-        <button
-          class="play-pause"
-          onclick={timerToggle}
-          aria-label={state.is_running ? 'Pause' : 'Play'}
-        >
-          {#key state.is_running}
-            <span class="icon" in:fade={{ duration: 120 }}>
-              {#if state.is_running}
-                <svg width="24" height="24" viewBox="0 0 24 24">
-                  <rect x="5" y="3" width="5" height="18" rx="1.5" fill="currentColor" />
-                  <rect x="14" y="3" width="5" height="18" rx="1.5" fill="currentColor" />
-                </svg>
-              {:else}
-                <svg width="18" height="18" viewBox="0 0 24 24" style="overflow: visible;">
-                  <polygon points="4,0 28,12 4,24" fill="currentColor" />
-                </svg>
-              {/if}
-            </span>
-          {/key}
-        </button>
-
-        <!-- Skip: advance to next round -->
-        <Tooltip text={m.tooltip_skip()}>
-          <button class="btn-side" onclick={timerSkip} aria-label="Skip round">
-            <svg width="18" height="18" viewBox="0 0 16 16">
-              <polygon points="1,1 10,8 1,15" fill="currentColor" />
-              <rect x="12" y="1" width="3" height="14" rx="1" fill="currentColor" />
-            </svg>
-          </button>
-        </Tooltip>
-
-        <TimerFooter snap={state} />
+    {#if !isCompact && belowGroups.length}
+      <div class="lane">
+        {#each belowGroups as g (g.key)}
+          {@render group(g.parts)}
+        {/each}
       </div>
     {/if}
   </div>
@@ -186,6 +226,13 @@
   }
 
   .timer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .lane {
     display: flex;
     flex-direction: column;
     align-items: center;

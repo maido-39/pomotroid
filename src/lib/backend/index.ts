@@ -53,6 +53,12 @@ export const setBackgroundFraming = b.setBackgroundFraming;
 export const resetBackgroundFraming = b.resetBackgroundFraming;
 export const nextBackground = b.nextBackground;
 
+// Theme editing
+export const saveTheme = b.saveTheme;
+export const deleteTheme = b.deleteTheme;
+export const broadcastThemePreview = b.broadcastThemePreview;
+export const onThemePreview = b.onThemePreview;
+
 // Fonts
 export const listFonts = b.listFonts;
 export const addFont = b.addFont;
