@@ -1,3 +1,46 @@
+## [v1.8.0] - 2026-10-17
+
+### Background image
+
+- **Your own backdrop** — pick an image and lay it behind every window, with opacity, blur and brightness sliders. Applied on desktop and Android alike.
+- **Framing** — drag the preview to choose which part of the image shows, and scroll or pinch to zoom. Each image keeps its own framing, so a portrait and a landscape photo can both be right.
+- **A folder of images** — point at a folder and the backdrop cycles through it: when the round changes, every few minutes, or on a double-click. Shuffle shows every picture before any repeats; off, the order follows file names.
+
+### Sounds
+
+- **Presets and preview** — five bundled presets per cue, and a ▶ button to hear the current choice.
+- **Several sounds per cue** — add more than one file and one plays at random, never the same one twice in a row. The tick keeps a single sound.
+
+### Look and layout
+
+- **Five clock styles** — the ring, large digits with a progress bar, a line around the window edge, a flip clock, and a clock face.
+- **Fonts** — add TTF, OTF, WOFF or WOFF2 files and choose them separately for the interface and the timer's digits.
+- **Customize** — move the round name, the controls and the footer above or below the clock or hide them, and edit a theme's colours with every window as the live preview. Saved themes can customise a built-in one, and deleting the copy restores the original.
+- **See-through window** — an opacity slider makes the window translucent so what is behind it stays readable (Windows).
+
+### Android and pairing
+
+- **Android app** — the same timer as a native app, standalone, with a foreground service and a live countdown notification that keeps running in the background.
+- **Follow a desktop** — pair over Wi-Fi with a QR code or link; the phone mirrors the desktop's rounds, sounds and background, and settings changed on the phone apply on the desktop.
+- **Choose the pairing address** — on a machine with VPN, VM or Docker adapters, pick which one the QR code advertises.
+
+### Desktop
+
+- **Portable mode** — a `data` folder beside the executable keeps settings, images, sounds, fonts and logs there instead.
+- **Launch at login** — optional, off by default.
+
+### Bug Fixes
+
+- **Always on top left off after a reset** — resetting the timer during a break could leave the window behind others with nothing to bring it back. The rule now lives in one place and is applied on every transition, including reset.
+- **Sliders and window moves were sluggish with a background image** — every slider step re-serialised the whole image into a style attribute and wrote to the database. The image is now referenced by a short blob URL and writes are debounced: brightness is about twenty times cheaper and a drag writes once.
+- **Android picker images rejected** — files from the Android photo picker have no extension; the image type is now read from the file's own bytes.
+- **Android title bar under the status bar** — the top bar now clears the status bar.
+- **Android notification buttons did nothing** — the generated Kotlin had fallen out of date; actions now reach the timer through a queue.
+
+### Development
+
+- The Rust test suite is reliable on Windows: the timer engine tests waited for a nominal number of ticks and failed at random, and now wait on the events themselves. 169 tests, nothing skipped.
+
 ## [v1.7.1] - 2026-05-11
 
 ### Bug Fixes
