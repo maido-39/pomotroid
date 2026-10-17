@@ -264,12 +264,77 @@ mod tests {
     /// Short tick used by all tests so the suite runs in < 1 s total.
     const TICK: Duration = Duration::from_millis(20);
 
-    fn drain(rx: &Receiver<TimerEvent>) -> Vec<TimerEvent> {
+    /// How long a test waits for an event before giving up. Far longer than
+    /// anything should take, so it only matters when something is really wrong.
+    const PATIENCE: Duration = Duration::from_secs(2);
+
+    /// Collect events until one matches `pred`, or `PATIENCE` runs out.
+    ///
+    /// The tests wait on events rather than sleeping for a nominal number of
+    /// ticks. A 20 ms tick on Windows can land 15 ms late — the default timer
+    /// resolution is about 15.6 ms — so "sleep two and a half ticks, then
+    /// expect two" was a coin toss, and these tests used to fail a few runs in
+    /// five. Waiting for the event itself is exact on any scheduler.
+    fn collect_until(
+        rx: &Receiver<TimerEvent>,
+        pred: impl Fn(&TimerEvent) -> bool,
+    ) -> Vec<TimerEvent> {
+        let deadline = Instant::now() + PATIENCE;
         let mut events = Vec::new();
-        while let Ok(e) = rx.recv_timeout(Duration::from_millis(5)) {
-            events.push(e);
+        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            match rx.recv_timeout(remaining) {
+                Ok(e) => {
+                    let done = pred(&e);
+                    events.push(e);
+                    if done {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
         }
         events
+    }
+
+    /// Collect events until `n` ticks have arrived.
+    fn wait_for_ticks(rx: &Receiver<TimerEvent>, n: usize) -> Vec<TimerEvent> {
+        let seen = std::cell::Cell::new(0usize);
+        collect_until(rx, |e| {
+            if matches!(e, TimerEvent::Tick { .. }) {
+                seen.set(seen.get() + 1);
+            }
+            seen.get() >= n
+        })
+    }
+
+    /// Everything that arrives in the next `window`. For checking that
+    /// something does *not* happen — a longer window only makes it stricter.
+    fn quiet_for(rx: &Receiver<TimerEvent>, window: Duration) -> Vec<TimerEvent> {
+        let deadline = Instant::now() + window;
+        let mut events = Vec::new();
+        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            match rx.recv_timeout(remaining) {
+                Ok(e) => events.push(e),
+                Err(_) => break,
+            }
+        }
+        events
+    }
+
+    fn tick_count(events: &[TimerEvent]) -> usize {
+        events.iter().filter(|e| matches!(e, TimerEvent::Tick { .. })).count()
+    }
+
+    /// `elapsed_secs` of the last tick in `events`, or 0.
+    fn last_elapsed(events: &[TimerEvent]) -> u32 {
+        events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                TimerEvent::Tick { elapsed_secs, .. } => Some(*elapsed_secs),
+                _ => None,
+            })
+            .unwrap_or(0)
     }
 
     fn collect_until_complete(rx: &Receiver<TimerEvent>, timeout: Duration) -> Vec<TimerEvent> {
@@ -332,39 +397,26 @@ mod tests {
         let (handle, rx) = spawn(6, TICK);
         handle.send(TimerCommand::Start);
 
-        // Let 2 ticks fire, then pause.
-        std::thread::sleep(TICK * 2 + TICK / 2);
+        let mut before = wait_for_ticks(&rx, 2);
         handle.send(TimerCommand::Pause);
+        before.extend(collect_until(&rx, |e| matches!(e, TimerEvent::Paused { .. })));
 
-        // Collect events so far.
-        std::thread::sleep(TICK * 3); // no ticks should arrive during this gap
-        let events_before_resume = drain(&rx);
-
-        let paused = events_before_resume
-            .iter()
-            .filter(|e| matches!(e, TimerEvent::Paused { .. }))
-            .count();
-        let ticks_before_pause = events_before_resume
-            .iter()
-            .filter(|e| matches!(e, TimerEvent::Tick { .. }))
-            .count();
+        let paused = before.iter().filter(|e| matches!(e, TimerEvent::Paused { .. })).count();
         assert_eq!(paused, 1, "expected 1 Paused event");
-        assert!(ticks_before_pause >= 2, "should have at least 2 ticks before pause");
+        assert!(tick_count(&before) >= 2, "should have at least 2 ticks before pause");
 
-        // Resume and let the rest complete.
+        // Paused means paused: nothing may tick in a window several ticks long.
+        let during = quiet_for(&rx, TICK * 4);
+        assert_eq!(tick_count(&during), 0, "no ticks may fire while paused");
+
         handle.send(TimerCommand::Resume);
-        let events_after = collect_until_complete(&rx, Duration::from_secs(2));
-
+        let after = collect_until_complete(&rx, PATIENCE);
         assert!(
-            events_after
-                .iter()
-                .any(|e| matches!(e, TimerEvent::Resumed { .. })),
+            after.iter().any(|e| matches!(e, TimerEvent::Resumed { .. })),
             "expected Resumed event"
         );
         assert!(
-            events_after
-                .iter()
-                .any(|e| matches!(e, TimerEvent::Complete { .. })),
+            after.iter().any(|e| matches!(e, TimerEvent::Complete { .. })),
             "expected Complete after resume"
         );
     }
@@ -373,19 +425,20 @@ mod tests {
     fn reset_returns_to_zero_and_fires_reset_event() {
         let (handle, rx) = spawn(10, TICK);
         handle.send(TimerCommand::Start);
-        std::thread::sleep(TICK * 2 + TICK / 2);
+        wait_for_ticks(&rx, 2);
         handle.send(TimerCommand::Reset);
 
-        let events = drain(&rx);
+        let events = collect_until(&rx, |e| matches!(e, TimerEvent::Reset));
         assert!(
             events.iter().any(|e| matches!(e, TimerEvent::Reset)),
             "expected Reset event"
         );
-        // No Complete should have fired.
         assert!(
             !events.iter().any(|e| matches!(e, TimerEvent::Complete { .. })),
             "Complete must not fire on Reset"
         );
+        // And it stays stopped: a reset timer does not keep ticking.
+        assert_eq!(tick_count(&quiet_for(&rx, TICK * 4)), 0, "no ticks after Reset");
     }
 
     #[test]
@@ -413,43 +466,26 @@ mod tests {
         let (handle, rx) = spawn(10, TICK);
         handle.send(TimerCommand::Start);
 
-        // Let 3 ticks fire, then suspend.
-        std::thread::sleep(TICK * 3 + TICK / 2);
+        wait_for_ticks(&rx, 3);
         handle.send(TimerCommand::Suspend);
-
-        let before = drain(&rx);
-        let suspended_elapsed = before.iter().find_map(|e| {
-            if let TimerEvent::Suspended { elapsed_secs } = e {
-                Some(*elapsed_secs)
-            } else {
-                None
-            }
-        });
-        assert!(
-            suspended_elapsed.is_some(),
-            "expected Suspended event with elapsed_secs"
-        );
-        let saved = suspended_elapsed.unwrap();
+        let before = collect_until(&rx, |e| matches!(e, TimerEvent::Suspended { .. }));
+        let saved = before
+            .iter()
+            .find_map(|e| match e {
+                TimerEvent::Suspended { elapsed_secs } => Some(*elapsed_secs),
+                _ => None,
+            })
+            .expect("expected Suspended event with elapsed_secs");
         assert!(saved >= 3, "elapsed at suspend should be >= 3 s, got {saved}");
 
-        // Gap: simulate OS sleep (no ticks must fire).
-        std::thread::sleep(TICK * 5);
-        let during_suspend = drain(&rx);
-        assert!(
-            !during_suspend.iter().any(|e| matches!(e, TimerEvent::Tick { .. })),
-            "no ticks must fire while suspended"
-        );
+        // Simulated OS sleep: nothing may tick.
+        assert_eq!(tick_count(&quiet_for(&rx, TICK * 5)), 0, "no ticks must fire while suspended");
 
-        // Wake and verify the timer continues from the saved position.
         handle.send(TimerCommand::WakeResume);
-        let after = collect_until_complete(&rx, Duration::from_secs(2));
-
-        let resumed = after.iter().find_map(|e| {
-            if let TimerEvent::Resumed { elapsed_secs } = e {
-                Some(*elapsed_secs)
-            } else {
-                None
-            }
+        let after = collect_until_complete(&rx, PATIENCE);
+        let resumed = after.iter().find_map(|e| match e {
+            TimerEvent::Resumed { elapsed_secs } => Some(*elapsed_secs),
+            _ => None,
         });
         assert_eq!(
             resumed,
@@ -481,7 +517,7 @@ mod tests {
         // Do NOT start — engine begins in Idle.
         handle.send(TimerCommand::Reset);
 
-        let events = drain(&rx);
+        let events = collect_until(&rx, |e| matches!(e, TimerEvent::Reset));
         assert!(
             events.iter().any(|e| matches!(e, TimerEvent::Reset)),
             "Reset while Idle must emit a Reset event"
@@ -536,21 +572,17 @@ mod tests {
         // should run at least one more tick first.
         let (handle, rx) = spawn(10, TICK);
         handle.send(TimerCommand::Start);
-        // Let 5 ticks fire so elapsed_secs = 5.
-        std::thread::sleep(TICK * 5 + TICK / 2);
-        // Prime with duration below elapsed — without the clamp this would fire
-        // Complete on the very next tick.
+        let before = wait_for_ticks(&rx, 5);
+        let at_prime = last_elapsed(&before);
+        // Without the clamp this would fire Complete on the very next tick.
         handle.send(TimerCommand::Prime { duration_secs: 2 });
 
-        let events = collect_until_complete(&rx, Duration::from_secs(2));
-        let ticks_after_prime: Vec<_> = events
+        let events = collect_until_complete(&rx, PATIENCE);
+        let later = events
             .iter()
-            .filter(|e| matches!(e, TimerEvent::Tick { elapsed_secs, .. } if *elapsed_secs > 5))
-            .collect();
-        assert!(
-            !ticks_after_prime.is_empty(),
-            "at least one tick must fire after Prime before Complete"
-        );
+            .filter(|e| matches!(e, TimerEvent::Tick { elapsed_secs, .. } if *elapsed_secs > at_prime))
+            .count();
+        assert!(later >= 1, "at least one tick must fire after Prime before Complete");
         assert!(
             matches!(events.last(), Some(TimerEvent::Complete { .. })),
             "timer must still complete after clamped Prime"
@@ -563,25 +595,26 @@ mod tests {
         // must not cause immediate completion on the first tick after Resume.
         let (handle, rx) = spawn(10, TICK);
         handle.send(TimerCommand::Start);
-        // Let 5 ticks fire, then pause.
-        std::thread::sleep(TICK * 5 + TICK / 2);
+        wait_for_ticks(&rx, 5);
         handle.send(TimerCommand::Pause);
-        std::thread::sleep(TICK); // let Paused event arrive
-        drain(&rx);
+        let paused = collect_until(&rx, |e| matches!(e, TimerEvent::Paused { .. }));
+        let at_pause = paused
+            .iter()
+            .find_map(|e| match e {
+                TimerEvent::Paused { elapsed_secs } => Some(*elapsed_secs),
+                _ => None,
+            })
+            .expect("expected a Paused event");
 
-        // Prime with duration below elapsed.
         handle.send(TimerCommand::Prime { duration_secs: 2 });
         handle.send(TimerCommand::Resume);
 
-        let events = collect_until_complete(&rx, Duration::from_secs(2));
-        let ticks_after_resume: Vec<_> = events
+        let events = collect_until_complete(&rx, PATIENCE);
+        let later = events
             .iter()
-            .filter(|e| matches!(e, TimerEvent::Tick { elapsed_secs, .. } if *elapsed_secs > 5))
-            .collect();
-        assert!(
-            !ticks_after_resume.is_empty(),
-            "at least one tick must fire after Resume before Complete"
-        );
+            .filter(|e| matches!(e, TimerEvent::Tick { elapsed_secs, .. } if *elapsed_secs > at_pause))
+            .count();
+        assert!(later >= 1, "at least one tick must fire after Resume before Complete");
         assert!(
             matches!(events.last(), Some(TimerEvent::Complete { .. })),
             "timer must still complete after clamped Prime in Paused phase"
