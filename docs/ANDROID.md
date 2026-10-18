@@ -127,8 +127,44 @@ symbols; a release build is a fraction of that.
 The first Gradle run downloads the wrapper and the Android toolchain — budget
 15–20 minutes and a few GB.
 
-Release builds need a signing key; follow the Tauri "Android code signing"
-guide and add `gen/android/keystore.properties`.
+## Release APK
+
+```bash
+npm run tauri android build --target aarch64
+```
+
+The output is
+`src-tauri/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release.apk`,
+about 19 MB. Release builds run R8; the Tauri plugin rules keep the
+`@TauriPlugin` classes, their `@Command` methods and `@InvokeArg` fields, so a
+command that does nothing on a release build but works on a debug one points
+at a missing keep rule, not at the Kotlin code.
+
+Without Developer Mode the same symlink workaround applies, with the release
+library and task names:
+
+```bash
+cp src-tauri/target/aarch64-linux-android/release/libpomotroid_lib.so \
+   src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/
+cd src-tauri/gen/android
+./gradlew assembleArm64Release -x rustBuildArm64Release
+```
+
+**Signing.** An unsigned release APK does not install. For a store or
+long-lived build, follow the Tauri "Android code signing" guide and add
+`gen/android/keystore.properties` (never commit it). For a sideload-only
+build, signing the release with the standard Android debug key is enough:
+add `signingConfig = signingConfigs.getByName("debug")` to the `release`
+block of `gen/android/app/build.gradle.kts` in your local copy only. The
+published 1.8.0 APK was built that way, which is why it says it is not a Play
+Store build. Check the result with:
+
+```bash
+apksigner verify --print-certs app-arm64-release.apk
+```
+
+An APK signed with a different key cannot update an installed one; uninstall
+first when switching keys.
 
 ## Pairing with a desktop
 
