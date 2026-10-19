@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { disposable } from '$lib/utils/listeners';
   import { settings } from '$lib/stores/settings';
   import {
     setSetting,
@@ -73,14 +74,12 @@
   }
 
   onMount(() => {
-    const cleanups: (() => void)[] = [];
-    (async () => {
-      await refreshPairing();
-      await loadInterfaces();
-      cleanups.push(await onWebsocketClients((c) => (clients = c.connected)));
-      cleanups.push(await onSettingsChanged(refreshPairing));
-    })();
-    return () => cleanups.forEach((fn) => fn());
+    const scope = disposable();
+    scope.add(onWebsocketClients((c) => (clients = c.connected)));
+    scope.add(onSettingsChanged(refreshPairing));
+    void refreshPairing();
+    void loadInterfaces();
+    return scope.dispose;
   });
 
   async function regenerateToken() {

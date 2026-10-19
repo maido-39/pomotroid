@@ -20,7 +20,7 @@
   import { resolveThemeName } from '$lib/utils/theme';
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
   import { isMac, isDesktopWindow, useInAppNav } from '$lib/utils/platform';
-  import type { UnlistenFn } from '@tauri-apps/api/event';
+  import { disposable } from '$lib/utils/listeners';
   import type { DetailedStats, HeatmapStats } from '$lib/types';
   import * as m from '$paraglide/messages.js';
   import { info, error as logError } from '$lib/utils/log';
@@ -57,7 +57,7 @@
   }
 
   onMount(() => {
-    const cleanups: UnlistenFn[] = [];
+    const scope = disposable();
 
     (async () => {
       try {
@@ -81,32 +81,38 @@
         throw e;
       }
 
-      cleanups.push(
-        await onRoundChange(async () => {
+      scope.add(
+        onRoundChange(async () => {
           try {
             detailed = await statsGetDetailed();
             if (heatmapLoaded) heatmap = await statsGetHeatmap();
           } catch (e) {
             await logError(`[stats] failed to refresh stats after round change: ${e}`);
           }
-        }),
-        await onSessionsCleared(async () => {
+        })
+      );
+      scope.add(
+        onSessionsCleared(async () => {
           try {
             detailed = await statsGetDetailed();
             if (heatmapLoaded) heatmap = await statsGetHeatmap();
           } catch (e) {
             await logError(`[stats] failed to refresh stats after session clear: ${e}`);
           }
-        }),
-        await onSessionsChanged(async () => {
+        })
+      );
+      scope.add(
+        onSessionsChanged(async () => {
           try {
             detailed = await statsGetDetailed();
             if (heatmapLoaded) heatmap = await statsGetHeatmap();
           } catch (e) {
             await logError(`[stats] failed to refresh stats after session change: ${e}`);
           }
-        }),
-        await onSettingsChanged(async (updated) => {
+        })
+      );
+      scope.add(
+        onSettingsChanged(async (updated) => {
           const prev = {
             mode: $settings.theme_mode,
             light: $settings.theme_light,
@@ -127,8 +133,10 @@
             const t = allThemes.find((th) => th.name === resolveThemeName(updated, dark));
             if (t) applyTheme(t);
           }
-        }),
-        await onThemesChanged((updated) => {
+        })
+      );
+      scope.add(
+        onThemesChanged((updated) => {
           const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
           const current =
             updated.find((t) => t.name === resolveThemeName($settings, dark)) ?? updated[0];
@@ -137,9 +145,7 @@
       );
     })();
 
-    return () => {
-      for (const fn of cleanups) fn();
-    };
+    return scope.dispose;
   });
 </script>
 

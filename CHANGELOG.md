@@ -1,3 +1,17 @@
+## [Unreleased]
+
+### Bug Fixes
+
+- **Settings tabs leaked their listeners** — a section subscribed to backend events only after its first load finished, so leaving it sooner left the subscriptions behind for good, each one keeping the dead section and whatever it held. Two hundred tab switches left 320 stray listeners and about 45 MB in the settings window, mostly copies of the background image; they now leave nothing. Every window and settings section registers through one helper that removes a late subscription the moment it arrives.
+- **Phones stayed paired after the token changed** — stopping the LAN server ended its accept loop but not the connections it had accepted, so regenerating the pairing token or switching LAN access off left already-paired phones attached. Every connection now closes with its server.
+- **The connected-device count could read 18 quintillion** — a restart reset the count to zero and the old connections then subtracted themselves from it. Connections now only ever count themselves out.
+- **Quick settings changes could leave the wrong server running** — two restarts in a row could interleave; restarts now run one at a time and use the settings current when they run.
+- **An older background image could replace a newer one** — when pictures changed faster than they loaded, the last to arrive won. Only the latest request is applied now, in the backdrop and in Settings, and choosing fonts quickly behaves the same way.
+- **A phone could show "connected" to a desktop that had gone** — after a network change a half-open connection could sit silent for minutes. The phone now reconnects when the desktop has not answered for a minute.
+- **Android notification refreshed every second** — the countdown notification was rebuilt on every tick although the system counts it down by itself. It is now sent when what it shows changes, and every 30 seconds as a safeguard.
+- **Android sound files piled up** — every sound played was staged as a file in the cache and never removed. Old files are cleared at start and the set is capped.
+- **Android audio player leaked on a bad file** — a sound file the decoder rejected left its native player unreleased.
+
 ## [v1.8.0] - 2026-10-17
 
 ### Background image

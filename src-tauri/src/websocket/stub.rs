@@ -26,8 +26,11 @@ pub struct StartConfig {
     pub token: String,
 }
 
-pub async fn start(_cfg: StartConfig, _app: AppHandle, _state: &Arc<WsState>) {}
-pub async fn stop(_state: &Arc<WsState>) {}
+pub async fn restart<F>(_app: &AppHandle, _state: &Arc<WsState>, _config: F)
+where
+    F: FnOnce() -> Option<StartConfig>,
+{
+}
 
 pub fn broadcast_started(_state: &Arc<WsState>, _total_secs: u32) {}
 pub fn broadcast_round_change(_state: &Arc<WsState>, _snapshot: TimerSnapshot) {}

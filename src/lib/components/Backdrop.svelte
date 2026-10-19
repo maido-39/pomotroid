@@ -11,6 +11,7 @@
   import { framingPreview } from '$lib/stores/framing';
   import { getBackground, onBackgroundChanged, onBackgroundFraming } from '$lib/backend';
   import { warn } from '$lib/utils/log';
+  import { disposable } from '$lib/utils/listeners';
   import { dataUrlToObjectUrl, frameBackground, FRAMING_DEFAULTS } from '$lib/utils/backdrop';
 
   // The backend hands over a `data:` URL, which can be megabytes of base64.
@@ -53,7 +54,14 @@
     placement = { ...FRAMING_DEFAULTS };
   }
 
+  // Changes can arrive faster than images do (rotation, a double-click held
+  // down). Only the newest request may install its picture, and none may after
+  // the backdrop is gone: a blob URL made then would never be revoked.
+  let request = 0;
+  let disposed = false;
+
   async function load() {
+    const mine = ++request;
     let dataUrl: string | null = null;
     let key: string | null = null;
     let next = { ...FRAMING_DEFAULTS };
@@ -65,6 +73,7 @@
     } catch (err) {
       await warn(`[backdrop] failed to load background: ${err}`);
     }
+    if (disposed || mine !== request) return;
     release();
     if (!dataUrl) return;
     try {
@@ -83,21 +92,20 @@
   }
 
   onMount(() => {
-    let unlisten: (() => void) | undefined;
-    let unlistenFraming: (() => void) | undefined;
-    (async () => {
-      await load();
-      unlisten = await onBackgroundChanged(load);
-      unlistenFraming = await onBackgroundFraming((change) => {
+    const scope = disposable();
+    scope.add(onBackgroundChanged(load));
+    scope.add(
+      onBackgroundFraming((change) => {
         // Another window re-framed the picture we are showing. Move it; the
         // image itself has not changed, so there is nothing to fetch.
         if (change.key !== imageKey) return;
         placement = { posX: change.pos_x, posY: change.pos_y, zoom: change.zoom };
-      });
-    })();
+      })
+    );
+    void load();
     return () => {
-      unlisten?.();
-      unlistenFraming?.();
+      disposed = true;
+      scope.dispose();
       release();
     };
   });

@@ -12,6 +12,7 @@
   // is edited and only written to disk on Save. Leaving the section, or
   // reverting, puts every window back on the saved theme.
   import { onMount, onDestroy } from 'svelte';
+  import { disposable } from '$lib/utils/listeners';
   import type { Layout, Theme } from '$lib/types';
   import { settings } from '$lib/stores/settings';
   import {
@@ -274,19 +275,16 @@
   }
 
   onMount(() => {
-    let unlisten: (() => void) | undefined;
-    (async () => {
-      try {
-        themes = await getThemes();
+    const scope = disposable();
+    scope.add(onThemesChanged((updated) => (themes = updated)));
+    getThemes()
+      .then((all) => {
+        if (scope.disposed) return;
+        themes = all;
         loadBase(resolveThemeName($settings, osDark));
-        unlisten = await onThemesChanged((updated) => {
-          themes = updated;
-        });
-      } catch (err) {
-        await warn(`[customize] could not load themes: ${err}`);
-      }
-    })();
-    return () => unlisten?.();
+      })
+      .catch((err) => warn(`[customize] could not load themes: ${err}`));
+    return scope.dispose;
   });
 
   // Leaving with unsaved colours must not strand every window on a preview.

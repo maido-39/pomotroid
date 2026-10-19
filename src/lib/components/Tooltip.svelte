@@ -21,6 +21,9 @@
   let tooltipEl = $state<HTMLSpanElement | undefined>(undefined);
   const tooltipId = `tooltip-${Math.random().toString(36).slice(2, 9)}`;
 
+  // A pending show must not fire into a tooltip that has been removed.
+  $effect(() => () => clearTimeout(timer));
+
   async function show() {
     // Already showing or timer running — nothing to do.
     if (visible || timer !== undefined) return;

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { disposable } from '$lib/utils/listeners';
   import type { Theme } from '$lib/types';
   import { settings } from '$lib/stores/settings';
   import { framingPreview } from '$lib/stores/framing';
@@ -25,7 +26,6 @@
     onFontsChanged,
   } from '$lib/backend';
   import { resolveThemeName } from '$lib/utils/theme';
-  import type { UnlistenFn } from '@tauri-apps/api/event';
   import * as m from '$paraglide/messages.js';
   import SettingsToggle from '$lib/components/settings/SettingsToggle.svelte';
   import SettingsSlider from '$lib/components/settings/SettingsSlider.svelte';
@@ -140,9 +140,15 @@
     rotateMins = $settings.bg_rotate_mins;
   });
 
+  // Rotation can fire changes faster than an image arrives; only the latest
+  // request may write, or an older picture could land on top of a newer one.
+  let bgRequest = 0;
+
   async function refreshBackground() {
+    const request = ++bgRequest;
     try {
       const info = await getBackground();
+      if (request !== bgRequest) return;
       bgName = info?.name ?? null;
       bgDataUrl = info?.data_url ?? null;
       bgKey = info?.key ?? null;
@@ -325,7 +331,7 @@
   }
 
   onMount(() => {
-    const cleanups: UnlistenFn[] = [];
+    const scope = disposable();
 
     // Track live OS color scheme changes to update picker highlights.
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
@@ -333,24 +339,22 @@
       osDark = e.matches;
     };
     mq.addEventListener('change', mqListener);
-    cleanups.push(() => mq.removeEventListener('change', mqListener));
+    scope.add(() => mq.removeEventListener('change', mqListener));
 
-    (async () => {
-      themes = await getThemes();
-      cleanups.push(
-        await onThemesChanged((updated) => {
-          themes = updated;
-        })
-      );
-      await refreshBackground();
-      cleanups.push(await onBackgroundChanged(refreshBackground));
-      await refreshFonts();
-      cleanups.push(await onFontsChanged(refreshFonts));
-    })();
+    // Subscribe first, then load: a refresh is idempotent, and an event that
+    // lands during the first load is then not lost.
+    scope.add(onThemesChanged((updated) => (themes = updated)));
+    scope.add(onBackgroundChanged(refreshBackground));
+    scope.add(onFontsChanged(refreshFonts));
+    getThemes()
+      .then((all) => {
+        if (!scope.disposed) themes = all;
+      })
+      .catch(() => {});
+    void refreshBackground();
+    void refreshFonts();
 
-    return () => {
-      for (const fn of cleanups) fn();
-    };
+    return scope.dispose;
   });
 
   // Mode selector: save + immediately apply the resolved theme.

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { disposable } from '$lib/utils/listeners';
   import { isMobile, isWeb } from '$lib/utils/platform';
   import { settings } from '$lib/stores/settings';
   import { applyFonts } from '$lib/stores/fonts';
@@ -47,8 +48,9 @@
 
     // The theme editor previews colours in every window, the real timer
     // included, before anything is saved. `null` ends the preview.
-    let stopPreview: (() => void) | undefined;
-    onThemePreview(async (colors) => {
+    const scope = disposable();
+    scope.add(
+      onThemePreview(async (colors) => {
       if (colors) {
         applyTheme({ name: 'preview', colors, is_custom: true });
         return;
@@ -58,7 +60,8 @@
       const name = resolveThemeName(get(settings), osDark);
       const saved = themes.find((t) => t.name === name) ?? themes[0];
       if (saved) applyTheme(saved);
-    }).then((fn) => (stopPreview = fn));
+      })
+    );
 
     let unlockHandler: (() => void) | undefined;
     if (isWeb) {
@@ -74,7 +77,7 @@
     }
 
     return () => {
-      stopPreview?.();
+      scope.dispose();
       document.removeEventListener('contextmenu', disableContextMenu, { capture: true });
       if (unlockHandler) {
         document.removeEventListener('pointerdown', unlockHandler, true);

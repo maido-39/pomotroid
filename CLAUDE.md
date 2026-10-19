@@ -93,7 +93,7 @@ Rust commands live in `src-tauri/src/commands.rs`. All commands return `Result<T
 
 **Important conversions** — Rust converts on load/save, frontend always sees the converted form:
 
-- Time: stored in DB as **minutes**, `Settings` struct holds **seconds**
+- Time: stored in DB as **seconds** under `time_*_secs` (MIGRATION_2 converted the old `time_*_mins` rows), and the `Settings` struct holds seconds too
 - Volume: stored in DB as **0–100**, `Settings` struct holds **0.0–1.0**
 
 ### Remote follow mode

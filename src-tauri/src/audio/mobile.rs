@@ -19,6 +19,12 @@ use crate::settings::Settings;
 
 const PREVIEW_MIN_VOLUME: f32 = 0.3;
 
+/// Most staged files kept at once. Every distinct sound gets a file — each
+/// sound in a pool, each preset, each sound a paired desktop sends — and none
+/// was ever removed, so the cache only grew. Past this many the set is cleared
+/// and rebuilt on demand; a file is a cheap rewrite of bytes already in hand.
+const MAX_STAGED: usize = 24;
+
 #[derive(Clone)]
 struct AudioSettings {
     volume: f32,
@@ -57,8 +63,12 @@ impl AudioManager {
         }))
     }
 
-    /// Provide the app handle needed to reach the native plugin.
+    /// Provide the app handle needed to reach the native plugin, and drop the
+    /// files a previous run staged: nothing refers to them any more.
     pub fn attach(&self, app: AppHandle) {
+        if let Ok(dir) = staging_dir(&app) {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
         *self.app.lock().unwrap() = Some(app);
     }
 
@@ -128,11 +138,7 @@ impl AudioManager {
                 return Ok(p.clone());
             }
         }
-        let dir = app
-            .path()
-            .app_cache_dir()
-            .map_err(|e| e.to_string())?
-            .join("audio");
+        let dir = staging_dir(app)?;
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let ext = match src.mime {
             "audio/wav" => "wav",
@@ -143,7 +149,17 @@ impl AudioManager {
         };
         let path = dir.join(format!("{key}.{ext}"));
         std::fs::write(&path, &src.bytes).map_err(|e| e.to_string())?;
-        self.written.lock().unwrap().insert(key.to_string(), path.clone());
+        let mut written = self.written.lock().unwrap();
+        if written.len() >= MAX_STAGED {
+            // A sound still playing keeps its open file; Android only frees an
+            // unlinked file once the player closes it.
+            for (_, old) in written.drain() {
+                if old != path {
+                    let _ = std::fs::remove_file(old);
+                }
+            }
+        }
+        written.insert(key.to_string(), path.clone());
         Ok(path)
     }
 
@@ -174,6 +190,10 @@ impl AudioManager {
         }
         info
     }
+}
+
+fn staging_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app.path().app_cache_dir().map_err(|e| e.to_string())?.join("audio"))
 }
 
 fn fnv1a(bytes: &[u8]) -> u64 {

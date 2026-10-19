@@ -31,7 +31,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Listener, Manager};
 use tokio::{
     net::TcpListener,
-    sync::{broadcast, mpsc},
+    sync::{broadcast, mpsc, watch},
     task::JoinHandle,
 };
 
@@ -212,6 +212,8 @@ struct ServerState {
     token: String,
     app: AppHandle,
     counters: Arc<Counters>,
+    /// Becomes `true` when the server that accepted a connection is stopped.
+    shutdown: watch::Receiver<bool>,
 }
 
 #[derive(Default)]
@@ -220,9 +222,29 @@ struct Counters {
     authed: AtomicUsize,
 }
 
+/// One running server: its accept loop and the signal that ends its
+/// connections.
+///
+/// Aborting the accept loop alone is not enough. Axum runs every upgraded
+/// WebSocket in a task of its own, so connections outlived the server that
+/// accepted them: a regenerated pairing token or a turned-off LAN switch left
+/// already-paired phones attached, and each one kept its broadcast receiver and
+/// task alive.
+struct Running {
+    accept: JoinHandle<()>,
+    shutdown: watch::Sender<bool>,
+}
+
+/// Upper bound on replies queued for one client. A client that stops reading
+/// makes the socket write wait, and the reply loop then waits here instead of
+/// buffering megabytes of base64 per request.
+const DIRECT_QUEUE: usize = 32;
+
 /// Tauri-managed WebSocket state.
 pub struct WsState {
-    task: tokio::sync::Mutex<Option<JoinHandle<()>>>,
+    /// Also serialises restarts: two settings changes in quick succession must
+    /// not interleave one's stop with the other's start.
+    task: tokio::sync::Mutex<Option<Running>>,
     pub broadcast_tx: broadcast::Sender<WsEvent>,
     counters: Arc<Counters>,
 }
@@ -295,11 +317,36 @@ pub struct StartConfig {
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-/// Start the WebSocket/HTTP server.
+/// Stop the running server, if any, and start one from `config()` if it
+/// returns a configuration.
 ///
-/// Emits `websocket:error` if the port is already in use.
-/// No-ops if already running (call `stop` first to change port).
-pub async fn start(cfg: StartConfig, app: AppHandle, state: &Arc<WsState>) {
+/// `config` is evaluated while the restart lock is held, so when several
+/// restarts queue up the last one to run reads the newest settings; passing a
+/// configuration captured at call time would let an older one win the race.
+pub async fn restart<F>(app: &AppHandle, state: &Arc<WsState>, config: F)
+where
+    F: FnOnce() -> Option<StartConfig>,
+{
+    let mut slot = state.task.lock().await;
+    stop_running(&mut slot).await;
+    if let Some(cfg) = config() {
+        *slot = start(cfg, app.clone(), state).await;
+    }
+}
+
+/// End a server and every connection it accepted, and wait until its socket is
+/// released so the same port can be bound again straight away.
+async fn stop_running(slot: &mut Option<Running>) {
+    let Some(running) = slot.take() else { return };
+    let _ = running.shutdown.send(true);
+    running.accept.abort();
+    let _ = running.accept.await;
+}
+
+/// Bind and spawn the WebSocket/HTTP server.
+///
+/// Emits `websocket:error` and returns `None` if the port is already in use.
+async fn start(cfg: StartConfig, app: AppHandle, state: &Arc<WsState>) -> Option<Running> {
     let ip: IpAddr = if cfg.lan { [0, 0, 0, 0].into() } else { [127, 0, 0, 1].into() };
     let addr = SocketAddr::new(ip, cfg.port);
     let listener = match TcpListener::bind(addr).await {
@@ -310,16 +357,18 @@ pub async fn start(cfg: StartConfig, app: AppHandle, state: &Arc<WsState>) {
                 "websocket:error",
                 json!({ "message": e.to_string(), "port": cfg.port }),
             );
-            return;
+            return None;
         }
     };
 
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let server_state = ServerState {
         broadcast_tx: state.broadcast_tx.clone(),
         backend: Arc::new(AppBackend { app: app.clone() }),
         token: cfg.token.clone(),
         app: app.clone(),
         counters: Arc::clone(&state.counters),
+        shutdown: shutdown_rx,
     };
 
     let router = Router::new()
@@ -336,7 +385,6 @@ pub async fn start(cfg: StartConfig, app: AppHandle, state: &Arc<WsState>) {
         }
     });
 
-    *state.task.lock().await = Some(handle);
     log::info!(
         "[ws] listening on ws://{}:{}/ws (lan={}, token={})",
         if cfg.lan { "0.0.0.0" } else { "127.0.0.1" },
@@ -344,15 +392,7 @@ pub async fn start(cfg: StartConfig, app: AppHandle, state: &Arc<WsState>) {
         cfg.lan,
         if cfg.token.is_empty() { "none" } else { "set" }
     );
-}
-
-/// Stop the WebSocket server (aborts the task).
-pub async fn stop(state: &Arc<WsState>) {
-    if let Some(handle) = state.task.lock().await.take() {
-        handle.abort();
-    }
-    state.counters.connected.store(0, Ordering::Relaxed);
-    state.counters.authed.store(0, Ordering::Relaxed);
+    Some(Running { accept: handle, shutdown: shutdown_tx })
 }
 
 // ---------------------------------------------------------------------------
@@ -455,7 +495,7 @@ async fn handle_socket(socket: WebSocket, peer: SocketAddr, state: ServerState) 
 
     let (mut sender, mut receiver) = socket.split();
     let mut rx = state.broadcast_tx.subscribe();
-    let (direct_tx, mut direct_rx) = mpsc::unbounded_channel::<String>();
+    let (direct_tx, mut direct_rx) = mpsc::channel::<String>(DIRECT_QUEUE);
 
     let ctx = Arc::new(ConnCtx {
         authed: AtomicBool::new(false),
@@ -509,7 +549,9 @@ async fn handle_socket(socket: WebSocket, peer: SocketAddr, state: ServerState) 
                     .await
                     .unwrap_or(None);
                     if let Some(json) = reply {
-                        let _ = direct_tx.send(json);
+                        if direct_tx.send(json).await.is_err() {
+                            break;
+                        }
                     }
                     if !was_authed && ctx_recv.authed.load(Ordering::Relaxed) {
                         counters.authed.fetch_add(1, Ordering::Relaxed);
@@ -528,10 +570,18 @@ async fn handle_socket(socket: WebSocket, peer: SocketAddr, state: ServerState) 
         }
     });
 
-    // If either task finishes, abort the other.
+    // If either task finishes, abort the other; stopping the server ends both.
+    // The counters are only ever decremented here, by the connection itself:
+    // resetting them on stop let a late disconnect wrap them past zero.
+    let mut shutdown = state.shutdown.clone();
     tokio::select! {
         _ = &mut send_task => recv_task.abort(),
         _ = &mut recv_task => send_task.abort(),
+        _ = shutdown.wait_for(|stopped| *stopped) => {
+            send_task.abort();
+            recv_task.abort();
+            log::debug!("[ws] closing {peer}: server stopped");
+        }
     }
 
     state.counters.connected.fetch_sub(1, Ordering::Relaxed);

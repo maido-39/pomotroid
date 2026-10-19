@@ -18,7 +18,7 @@
   import { isMac, isDesktopWindow } from '$lib/utils/platform';
   import { setLocale } from '$lib/locale.svelte.js';
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-  import type { UnlistenFn } from '@tauri-apps/api/event';
+  import { disposable } from '$lib/utils/listeners';
   import { info, error as logError } from '$lib/utils/log';
   import { createLocalShortcutHandler } from '$lib/utils/localShortcuts';
 
@@ -85,7 +85,7 @@
   }
 
   onMount(() => {
-    const cleanups: UnlistenFn[] = [];
+    const scope = disposable();
 
     // Mount local keyboard shortcut handler.
     const shortcutHandler = createLocalShortcutHandler({
@@ -104,7 +104,7 @@
       },
     });
     document.addEventListener('keydown', shortcutHandler);
-    cleanups.push(() => document.removeEventListener('keydown', shortcutHandler));
+    scope.add(() => document.removeEventListener('keydown', shortcutHandler));
 
     (async () => {
       try {
@@ -138,11 +138,11 @@
         if (t) applyTheme(t);
       };
       mq.addEventListener('change', mqListener);
-      cleanups.push(() => mq.removeEventListener('change', mqListener));
+      scope.add(() => mq.removeEventListener('change', mqListener));
 
       // Keep settings store in sync with backend changes.
-      cleanups.push(
-        await onSettingsChanged(async (updated) => {
+      scope.add(
+        onSettingsChanged(async (updated) => {
           const prevMode = $settings.theme_mode;
           const prevLight = $settings.theme_light;
           const prevDark = $settings.theme_dark;
@@ -162,9 +162,11 @@
             const t = allThemes.find((th) => th.name === resolveThemeName(updated, dark));
             if (t) applyTheme(t);
           }
-        }),
-        // Re-apply theme when custom themes are hot-reloaded.
-        await onThemesChanged((updated) => {
+        })
+      );
+      // Re-apply theme when custom themes are hot-reloaded.
+      scope.add(
+        onThemesChanged((updated) => {
           const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
           const current =
             updated.find((t) => t.name === resolveThemeName($settings, dark)) ?? updated[0];
@@ -173,9 +175,7 @@
       );
     })();
 
-    return () => {
-      for (const fn of cleanups) fn();
-    };
+    return scope.dispose;
   });
 </script>
 

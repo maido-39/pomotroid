@@ -287,7 +287,7 @@ pub fn run() {
 
                 // --- WebSocket server (opt-in; also enabled by LAN phone access) ---
                 if initial_settings.websocket_enabled || initial_settings.websocket_lan_enabled {
-                    commands::restart_websocket(app.handle(), &initial_settings, Arc::clone(&ws_state));
+                    commands::restart_websocket(app.handle(), Arc::clone(&ws_state));
                 }
 
                 setup_desktop_window(app, &initial_settings, db.clone());

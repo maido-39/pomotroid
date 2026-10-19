@@ -118,26 +118,29 @@ class TimerServicePlugin(private val activity: Activity) : Plugin(activity) {
                 invoke.reject("sound file not found: ${args.path}")
                 return
             }
-            player?.let {
-                try { it.stop() } catch (_: Exception) {}
-                it.release()
-            }
-            val mp = MediaPlayer().apply {
-                setAudioAttributes(
+            releasePlayer()
+            val mp = MediaPlayer()
+            try {
+                mp.setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_ALARM)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                         .build()
                 )
-                setDataSource(file.absolutePath)
+                mp.setDataSource(file.absolutePath)
                 val v = args.volume.coerceIn(0f, 1f)
-                setVolume(v, v)
-                setOnCompletionListener { p ->
+                mp.setVolume(v, v)
+                mp.setOnCompletionListener { p ->
                     p.release()
                     if (player === p) player = null
                 }
-                prepare()
-                start()
+                mp.prepare()
+                mp.start()
+            } catch (e: Exception) {
+                // A file the decoder rejects must not leave a native player
+                // behind: MediaPlayer holds codec resources until release().
+                mp.release()
+                throw e
             }
             player = mp
             invoke.resolve()
@@ -164,15 +167,20 @@ class TimerServicePlugin(private val activity: Activity) : Plugin(activity) {
     fun stop(invoke: Invoke) {
         try {
             activity.stopService(Intent(activity, TimerForegroundService::class.java))
-            player?.let {
-                try { it.stop() } catch (_: Exception) {}
-                it.release()
-            }
-            player = null
+            releasePlayer()
             invoke.resolve()
         } catch (e: Exception) {
             invoke.reject(e.message ?: "stop failed")
         }
+    }
+
+    /** Stop and free the current player, and forget it, so a later failure
+     *  never finds a released instance still referenced here. */
+    private fun releasePlayer() {
+        val p = player ?: return
+        player = null
+        try { p.stop() } catch (_: Exception) {}
+        p.release()
     }
 
     companion object {

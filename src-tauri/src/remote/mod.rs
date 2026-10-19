@@ -37,6 +37,13 @@ use crate::timer::{TimerController, TimerSnapshot};
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 const BACKOFF_MIN: Duration = Duration::from_secs(2);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
+/// How often an idle session pings the desktop.
+const PING_EVERY: Duration = Duration::from_secs(20);
+/// A session that has heard nothing for this long is treated as gone. The
+/// desktop answers every ping, so a live link is never silent for more than
+/// `PING_EVERY`; a phone that changed networks, though, can keep a half-open
+/// TCP connection for many minutes, showing "connected" while nothing arrives.
+const SILENCE_LIMIT: Duration = Duration::from_secs(60);
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -535,8 +542,9 @@ async fn run_session(
     let _ = out_tx.send(json!({ "type": "auth", "token": token, "id": 0 }).to_string());
 
     let mut authed = false;
-    let mut ping_timer = tokio::time::interval(Duration::from_secs(20));
+    let mut ping_timer = tokio::time::interval(PING_EVERY);
     ping_timer.tick().await; // first tick is immediate
+    let mut last_heard = std::time::Instant::now();
 
     let reason = loop {
         tokio::select! {
@@ -547,6 +555,7 @@ async fn run_session(
             }
             incoming = stream.next() => {
                 let Some(Ok(msg)) = incoming else { break "connection closed".to_string() };
+                last_heard = std::time::Instant::now();
                 let Message::Text(text) = msg else { continue };
                 let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
                 if !still_current(st, generation) {
@@ -590,6 +599,9 @@ async fn run_session(
                 handle_event(app, st, &out_tx, value);
             }
             _ = ping_timer.tick() => {
+                if last_heard.elapsed() > SILENCE_LIMIT {
+                    break format!("no reply from the desktop for {} s", SILENCE_LIMIT.as_secs());
+                }
                 let _ = out_tx.send(json!({ "type": "ping" }).to_string());
             }
         }
@@ -772,9 +784,11 @@ fn handle_event(app: &AppHandle, st: &Arc<RemoteState>, out_tx: &mpsc::Unbounded
             let _ = app.emit("audio:changed", cue);
         }
         "audio" => {
-            let cue = value.get("cue").and_then(|c| c.as_str()).unwrap_or("").to_string();
-            if let Some(entry) = decode_audio_reply(&value) {
-                st.inner.lock().unwrap().audio_cache.insert(cue, entry);
+            // Only the known cues are cached, so the cache stays one entry per
+            // cue whatever the other end sends.
+            let cue = value.get("cue").and_then(|c| c.as_str()).and_then(AudioCue::from_key);
+            if let (Some(cue), Some(entry)) = (cue, decode_audio_reply(&value)) {
+                st.inner.lock().unwrap().audio_cache.insert(cue.key().to_string(), entry);
             }
         }
         "sessionsChanged" => {

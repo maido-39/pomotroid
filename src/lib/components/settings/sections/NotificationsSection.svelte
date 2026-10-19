@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { disposable } from '$lib/utils/listeners';
   import { settings } from '$lib/stores/settings';
   import {
     setSetting,
@@ -90,18 +91,16 @@
   }
 
   onMount(() => {
-    const cleanups: (() => void)[] = [];
-    (async () => {
-      try {
-        presets = await audioPresets();
-      } catch (err) {
-        await warn(`[audio] audioPresets failed: ${err}`);
-      }
-      await refreshAudioInfo();
-      cleanups.push(await onSettingsChanged(refreshAudioInfo));
-      cleanups.push(await onAudioChanged(refreshAudioInfo));
-    })();
-    return () => cleanups.forEach((fn) => fn());
+    const scope = disposable();
+    scope.add(onSettingsChanged(refreshAudioInfo));
+    scope.add(onAudioChanged(refreshAudioInfo));
+    audioPresets()
+      .then((p) => {
+        if (!scope.disposed) presets = p;
+      })
+      .catch((err) => warn(`[audio] audioPresets failed: ${err}`));
+    void refreshAudioInfo();
+    return scope.dispose;
   });
 
   // Close the open dropdown on outside click.

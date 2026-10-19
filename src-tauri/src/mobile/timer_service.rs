@@ -18,6 +18,8 @@
 /// the service queues taps instead, and a small Rust thread drains that queue
 /// and applies them. Polling only runs while the service is up (the timer is
 /// running or paused), which is the only time an action can be queued.
+use std::time::{Duration, Instant};
+
 use tauri::AppHandle;
 
 use crate::timer::TimerSnapshot;
@@ -37,6 +39,85 @@ pub fn round_texts(snap: &TimerSnapshot) -> (&'static str, &'static str) {
     }
 }
 
+/// Decides when the ongoing Android notification needs a new message.
+///
+/// `update` is called on every tick, and each call used to restart the
+/// foreground service and rebuild the notification — once a second, the very
+/// wake-up the chronometer exists to avoid. While running, the notification
+/// counts down by itself from the end it was given; it only needs a new message
+/// when something it shows changes, when that end has drifted (a restarted
+/// round, a resume, a skip), or every `REFRESH` so that a service the system
+/// killed and restarted gets its notification back.
+///
+/// Platform-neutral so it can be tested on the desktop.
+#[cfg_attr(desktop, allow(dead_code))]
+pub(crate) struct NotificationGate {
+    /// What was shown, the end it was given, and when it was sent.
+    last: Option<(Shown, Option<Instant>, Instant)>,
+}
+
+#[derive(Clone, PartialEq)]
+struct Shown {
+    round_type: String,
+    total_secs: u32,
+    is_running: bool,
+    is_paused: bool,
+    round: u32,
+    rounds: u32,
+    /// The remaining time is printed while stopped, so it is part of what is
+    /// shown; while running the chronometer draws it.
+    stopped_elapsed: Option<u32>,
+}
+
+/// How far the computed end may move before the notification is re-sent.
+#[cfg_attr(desktop, allow(dead_code))]
+const END_TOLERANCE: Duration = Duration::from_secs(2);
+#[cfg_attr(desktop, allow(dead_code))]
+const REFRESH: Duration = Duration::from_secs(30);
+
+#[cfg_attr(desktop, allow(dead_code))]
+impl NotificationGate {
+    pub(crate) const fn new() -> Self {
+        Self { last: None }
+    }
+
+    /// True when `snap` must be sent; records it as sent if so.
+    pub(crate) fn should_send(&mut self, snap: &TimerSnapshot, now: Instant) -> bool {
+        let shown = Shown {
+            round_type: snap.round_type.clone(),
+            total_secs: snap.total_secs,
+            is_running: snap.is_running,
+            is_paused: snap.is_paused,
+            round: snap.work_round_number,
+            rounds: snap.work_rounds_total,
+            stopped_elapsed: (!snap.is_running).then_some(snap.elapsed_secs),
+        };
+        let ends_at = snap.is_running.then(|| {
+            now + Duration::from_secs(snap.total_secs.saturating_sub(snap.elapsed_secs) as u64)
+        });
+        if let Some((prev, prev_end, sent_at)) = &self.last {
+            let end_matches = match (prev_end, ends_at) {
+                (Some(a), Some(b)) => {
+                    let drift = if *a > b { *a - b } else { b - *a };
+                    drift <= END_TOLERANCE
+                }
+                (None, None) => true,
+                _ => false,
+            };
+            if *prev == shown && end_matches && now.duration_since(*sent_at) < REFRESH {
+                return false;
+            }
+        }
+        self.last = Some((shown, ends_at, now));
+        true
+    }
+
+    /// Forget what was shown; the next update is always sent.
+    pub(crate) fn reset(&mut self) {
+        self.last = None;
+    }
+}
+
 #[cfg(desktop)]
 mod imp {
     use super::*;
@@ -52,7 +133,7 @@ mod imp {
 mod imp {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::Duration;
+    use std::sync::Mutex;
     use tauri::plugin::{Builder, PluginHandle, TauriPlugin};
     use tauri::{Manager, Wry};
 
@@ -66,6 +147,8 @@ mod imp {
     const POLL_ACTIVE: Duration = Duration::from_millis(700);
     /// Idle back-off: without a notification nothing can queue an action.
     const POLL_IDLE: Duration = Duration::from_secs(3);
+
+    static GATE: Mutex<NotificationGate> = Mutex::new(NotificationGate::new());
 
     /// Build the Tauri plugin that registers the Kotlin class and starts the
     /// thread that applies notification-action taps.
@@ -158,6 +241,9 @@ mod imp {
 
     pub fn update(app: &AppHandle, snap: &TimerSnapshot) {
         SERVICE_ACTIVE.store(snap.is_running || snap.is_paused, Ordering::Relaxed);
+        if !GATE.lock().unwrap().should_send(snap, Instant::now()) {
+            return;
+        }
         call(
             app,
             "update",
@@ -197,6 +283,7 @@ mod imp {
 
     pub fn stop(app: &AppHandle) {
         SERVICE_ACTIVE.store(false, Ordering::Relaxed);
+        GATE.lock().unwrap().reset();
         call(app, "stop", serde_json::json!({}));
     }
 }
@@ -219,6 +306,54 @@ mod tests {
             work_rounds_total: 4,
             session_work_count: 1,
         }
+    }
+
+    fn running(elapsed: u32) -> TimerSnapshot {
+        TimerSnapshot { elapsed_secs: elapsed, is_running: true, ..snap("work", "") }
+    }
+
+    #[test]
+    fn a_running_round_is_sent_once_not_every_tick() {
+        let mut gate = NotificationGate::new();
+        let t0 = Instant::now();
+        assert!(gate.should_send(&running(0), t0));
+        // Ticks: elapsed and the clock advance together, the end stays put.
+        for s in 1..20 {
+            assert!(!gate.should_send(&running(s), t0 + Duration::from_secs(s as u64)), "tick {s}");
+        }
+    }
+
+    #[test]
+    fn a_moved_end_is_sent() {
+        let mut gate = NotificationGate::new();
+        let t0 = Instant::now();
+        assert!(gate.should_send(&running(10), t0));
+        // Restart round: same everything, but back to zero one second later.
+        assert!(gate.should_send(&running(0), t0 + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn pause_resume_and_round_changes_are_sent() {
+        let mut gate = NotificationGate::new();
+        let t0 = Instant::now();
+        assert!(gate.should_send(&running(5), t0));
+        let paused = TimerSnapshot { elapsed_secs: 5, is_paused: true, ..snap("work", "") };
+        assert!(gate.should_send(&paused, t0));
+        assert!(!gate.should_send(&paused, t0 + Duration::from_secs(3)));
+        assert!(gate.should_send(&running(5), t0 + Duration::from_secs(4)));
+        let brk = TimerSnapshot { is_running: true, ..snap("short-break", "work") };
+        assert!(gate.should_send(&brk, t0 + Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn an_unchanged_notification_is_refreshed_eventually() {
+        let mut gate = NotificationGate::new();
+        let t0 = Instant::now();
+        assert!(gate.should_send(&running(0), t0));
+        assert!(!gate.should_send(&running(29), t0 + Duration::from_secs(29)));
+        assert!(gate.should_send(&running(31), t0 + Duration::from_secs(31)));
+        gate.reset();
+        assert!(gate.should_send(&running(31), t0 + Duration::from_secs(31)));
     }
 
     #[test]

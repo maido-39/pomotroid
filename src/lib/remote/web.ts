@@ -178,14 +178,23 @@ async function request<T = unknown>(msg: Record<string, unknown>): Promise<T> {
       return;
     }
     const id = nextId++;
-    pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-    socket.send(JSON.stringify({ ...msg, id }));
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       if (pending.has(id)) {
         pending.delete(id);
         reject(new Error('desktop did not answer in time'));
       }
     }, 8000);
+    pending.set(id, {
+      resolve: (v: unknown) => {
+        clearTimeout(timer);
+        (resolve as (v: unknown) => void)(v);
+      },
+      reject: (e: Error) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    });
+    socket.send(JSON.stringify({ ...msg, id }));
   });
 }
 
@@ -321,6 +330,9 @@ async function audioBlobUrl(cue: AudioCueKey): Promise<string> {
   const reply = await request<{ payload: { mime: string; data_b64: string } }>({ type: 'getAudio', cue });
   const bytes = Uint8Array.from(atob(reply.payload.data_b64), (c) => c.charCodeAt(0));
   const url = URL.createObjectURL(new Blob([bytes], { type: reply.payload.mime }));
+  // The broadcast copy may have arrived while this request was in flight.
+  const raced = audioUrls.get(cue);
+  if (raced) URL.revokeObjectURL(raced);
   audioUrls.set(cue, url);
   return url;
 }

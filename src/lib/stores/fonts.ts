@@ -29,6 +29,9 @@ type Slot = 'ui' | 'digits';
 /** What is installed per slot, kept so it can be taken back out again. */
 type Installed = { name: string; url: string; face: FontFace };
 const installed: Record<Slot, Installed | null> = { ui: null, digits: null };
+/** Bumped on every request per slot. Choosing A then B quickly starts two
+ *  loads, and A may finish last; only the newest may install its face. */
+const requested: Record<Slot, number> = { ui: 0, digits: 0 };
 
 function familyOf(slot: Slot): string {
   return slot === 'ui' ? UI_FAMILY : DIGITS_FAMILY;
@@ -78,6 +81,7 @@ function toObjectUrl(dataUrl: string, mime: string): string {
  */
 export async function useFont(slot: Slot, name: string): Promise<void> {
   const wanted = name.trim();
+  const mine = ++requested[slot];
   if (installed[slot]?.name === wanted) return;
   if (!wanted) {
     release(slot);
@@ -88,6 +92,7 @@ export async function useFont(slot: Slot, name: string): Promise<void> {
   let url: string | null = null;
   try {
     const source = await getFontFace(wanted);
+    if (mine !== requested[slot]) return;
     if (!source) {
       // Chosen but gone. The slot falls back rather than clearing the setting
       // from here, which would fight the backend over the same value.
@@ -102,6 +107,10 @@ export async function useFont(slot: Slot, name: string): Promise<void> {
     // Rejects on a blocked fetch or a file the engine cannot parse, which is
     // the whole reason for not using an `@font-face` rule here.
     await face.load();
+    if (mine !== requested[slot]) {
+      URL.revokeObjectURL(url);
+      return;
+    }
 
     release(slot);
     document.fonts.add(face);
@@ -111,6 +120,7 @@ export async function useFont(slot: Slot, name: string): Promise<void> {
     await info(`[fonts] ${slot} is now ${wanted}`);
   } catch (err) {
     if (url) URL.revokeObjectURL(url);
+    if (mine !== requested[slot]) return;
     await warn(`[fonts] could not use '${wanted}' for ${slot}: ${err}`);
     release(slot);
     render();

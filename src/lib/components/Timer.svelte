@@ -21,7 +21,7 @@
   import TimerFooter from './TimerFooter.svelte';
   import MiniControls from './MiniControls.svelte';
   import Tooltip from './Tooltip.svelte';
-  import type { UnlistenFn } from '@tauri-apps/api/event';
+  import { disposable } from '$lib/utils/listeners';
   import * as m from '$paraglide/messages.js';
   import { notificationShow } from '$lib/backend';
 
@@ -54,69 +54,73 @@
   }
 
   onMount(() => {
-    const cleanups: UnlistenFn[] = [];
+    const scope = disposable();
 
-    // Async setup: hydrate state and register event listeners.
-    (async () => {
-      const initial = await getTimerState();
-      timerState.set(initial);
-
-      cleanups.push(
-        await onTimerTick(({ elapsed_secs, total_secs }) => {
-          timerState.update((s) => ({
-            ...s,
-            elapsed_secs,
-            total_secs,
-            is_running: true,
-            is_paused: false,
-          }));
-        }),
-        await onTimerPaused(({ elapsed_secs }) => {
-          timerState.update((s) => ({
-            ...s,
-            elapsed_secs,
-            is_running: false,
-            is_paused: true,
-          }));
-        }),
-        await onTimerResumed(({ elapsed_secs }) => {
-          timerState.update((s) => ({
-            ...s,
-            elapsed_secs,
-            is_running: true,
-            is_paused: false,
-          }));
-        }),
-        await onRoundChange((snap) => {
-          timerState.set(snap);
-          if ($settings.notifications_enabled) {
-            let title: string;
-            let body: string;
-            if (snap.round_type === 'work') {
-              const afterBreak =
-                snap.previous_round_type === 'short-break' ||
-                snap.previous_round_type === 'long-break';
-              title = afterBreak ? m.notification_work_title() : m.notification_work_start_title();
-              body = afterBreak ? m.notification_work_body() : m.notification_work_start_body();
-            } else if (snap.round_type === 'short-break') {
-              title = m.notification_short_break_title();
-              body = m.notification_short_break_body();
-            } else {
-              title = m.notification_long_break_title();
-              body = m.notification_long_break_body();
-            }
-            notificationShow(title, body).catch(() => {});
+    // Subscribe before hydrating, so a round that changes while the state is
+    // in flight is not missed.
+    scope.add(
+      onTimerTick(({ elapsed_secs, total_secs }) => {
+        timerState.update((s) => ({
+          ...s,
+          elapsed_secs,
+          total_secs,
+          is_running: true,
+          is_paused: false,
+        }));
+      })
+    );
+    scope.add(
+      onTimerPaused(({ elapsed_secs }) => {
+        timerState.update((s) => ({
+          ...s,
+          elapsed_secs,
+          is_running: false,
+          is_paused: true,
+        }));
+      })
+    );
+    scope.add(
+      onTimerResumed(({ elapsed_secs }) => {
+        timerState.update((s) => ({
+          ...s,
+          elapsed_secs,
+          is_running: true,
+          is_paused: false,
+        }));
+      })
+    );
+    scope.add(
+      onRoundChange((snap) => {
+        timerState.set(snap);
+        if ($settings.notifications_enabled) {
+          let title: string;
+          let body: string;
+          if (snap.round_type === 'work') {
+            const afterBreak =
+              snap.previous_round_type === 'short-break' ||
+              snap.previous_round_type === 'long-break';
+            title = afterBreak ? m.notification_work_title() : m.notification_work_start_title();
+            body = afterBreak ? m.notification_work_body() : m.notification_work_start_body();
+          } else if (snap.round_type === 'short-break') {
+            title = m.notification_short_break_title();
+            body = m.notification_short_break_body();
+          } else {
+            title = m.notification_long_break_title();
+            body = m.notification_long_break_body();
           }
-        }),
-        await onTimerReset((snap) => {
-          timerState.set(snap);
-        })
-      );
-    })();
+          notificationShow(title, body).catch(() => {});
+        }
+      })
+    );
+    scope.add(onTimerReset((snap) => timerState.set(snap)));
 
-    return () => {
-      for (const unlisten of cleanups) unlisten();
-    };
+    getTimerState()
+      .then((initial) => {
+        if (!scope.disposed) timerState.set(initial);
+      })
+      .catch(() => {});
+
+    return scope.dispose;
   });
 </script>
 

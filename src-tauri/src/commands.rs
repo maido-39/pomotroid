@@ -260,27 +260,30 @@ pub fn settings_set_impl(app: &AppHandle, key: &str, value: &str) -> Result<Sett
 
     // Start or stop the WebSocket server when its configuration changes.
     if matches!(key, "websocket_enabled" | "websocket_port" | "websocket_lan_enabled" | "websocket_token") {
-        restart_websocket(app, &new_settings, Arc::clone(&*ws_state));
+        restart_websocket(app, Arc::clone(&*ws_state));
     }
 
     app.emit("settings:changed", &new_settings).ok();
     Ok(new_settings)
 }
 
-/// (Re)start the WebSocket server from the given settings, stopping any running instance first.
-pub fn restart_websocket(app: &AppHandle, s: &Settings, ws: Arc<WsState>) {
-    let cfg = websocket::StartConfig {
-        port: s.websocket_port,
-        lan: s.websocket_lan_enabled,
-        token: s.websocket_token.clone(),
-    };
-    let enabled = s.websocket_enabled || s.websocket_lan_enabled;
+/// (Re)start the WebSocket server from the current settings, stopping any
+/// running instance — and the connections it accepted — first.
+///
+/// The settings are read when the restart runs, not when it is requested, so a
+/// burst of changes ends with the server matching the last of them.
+pub fn restart_websocket(app: &AppHandle, ws: Arc<WsState>) {
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
-        websocket::stop(&ws).await;
-        if enabled {
-            websocket::start(cfg, app_clone, &ws).await;
-        }
+        websocket::restart(&app_clone, &ws, || {
+            let s = settings_get_impl(&app_clone).ok()?;
+            (s.websocket_enabled || s.websocket_lan_enabled).then(|| websocket::StartConfig {
+                port: s.websocket_port,
+                lan: s.websocket_lan_enabled,
+                token: s.websocket_token.clone(),
+            })
+        })
+        .await;
     });
 }
 
@@ -390,7 +393,7 @@ pub fn settings_reset_impl(app: &AppHandle) -> Result<Settings, String> {
         *tray_state.colors.lock().unwrap() = tray::TrayColors::from_colors_map(&theme.colors);
     }
     shortcuts::register_all(app, &new_settings);
-    restart_websocket(app, &new_settings, Arc::clone(&*ws_state));
+    restart_websocket(app, Arc::clone(&*ws_state));
     app.emit("settings:changed", &new_settings).ok();
     Ok(new_settings)
 }

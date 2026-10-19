@@ -2,6 +2,7 @@
   // "Desktop" section (Android app and browser build): pair with a desktop
   // Pomotroid over LAN and follow its timer.
   import { onMount } from 'svelte';
+  import { disposable } from '$lib/utils/listeners';
   import {
     remoteConnect,
     remoteDisconnect,
@@ -58,16 +59,14 @@
   }
 
   onMount(() => {
-    let unlisten: (() => void) | undefined;
-    (async () => {
-      try {
-        applyStatus(await remoteStatus());
-      } catch (err) {
-        await logError(`[connect] remoteStatus failed: ${err}`);
-      }
-      unlisten = await onRemoteStatus(applyStatus);
-    })();
-    return () => unlisten?.();
+    const scope = disposable();
+    scope.add(onRemoteStatus(applyStatus));
+    remoteStatus()
+      .then((s) => {
+        if (!scope.disposed) applyStatus(s);
+      })
+      .catch((err) => logError(`[connect] remoteStatus failed: ${err}`));
+    return scope.dispose;
   });
 
   async function fillFromText(text: string) {
