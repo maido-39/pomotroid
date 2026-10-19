@@ -1,6 +1,18 @@
 ## [Unreleased]
 
+### Focus tools
+
+- **Tasks** — pick what a focus round is for from a chip under the timer, or type a new one. Statistics show focus time per task today and this week; a task that already has rounds is archived rather than deleted, so its history keeps its name.
+- **Daily goal and streak** — set how many focus rounds you aim for each day. The timer shows today's progress, the time you will reach the goal at your current pace, and how many days in a row you have met it.
+- **Note after each round** — once a focus round ends, a line under the timer asks what you got done. Notes appear in Statistics next to each of today's rounds.
+- **Flow mode** — a focus round can run past its end: the clock counts on as `+MM:SS`, a "Start Break" button appears, and the round is recorded with the time actually spent.
+- **Presets** — switch every duration and the rounds before a long break in one click (Classic 25/5, Deep work 50/10, 90/20 to start with), and save your own.
+- **Finish time** — the timer shows when the current round ends.
+- **Focus sounds** — white, pink and brown noise, rain and waves, generated as they play so they never loop audibly, or your own file on repeat. They play while a round runs, stop when it is paused, and can carry on through breaks. Volume is separate from the alerts.
+
 ### Bug Fixes
+
+- **The dial wound round again in overtime** — progress past the end of a round is now held at full.
 
 - **Settings tabs leaked their listeners** — a section subscribed to backend events only after its first load finished, so leaving it sooner left the subscriptions behind for good, each one keeping the dead section and whatever it held. Two hundred tab switches left 320 stray listeners and about 45 MB in the settings window, mostly copies of the background image; they now leave nothing. Every window and settings section registers through one helper that removes a late subscription the moment it arrives.
 - **Phones stayed paired after the token changed** — stopping the LAN server ended its accept loop but not the connections it had accepted, so regenerating the pairing token or switching LAN access off left already-paired phones attached. Every connection now closes with its server.

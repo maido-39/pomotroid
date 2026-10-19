@@ -115,3 +115,19 @@ export const onWebsocketClients = b.onWebsocketClients;
 export function startWebSession(): void {
   if (isWeb) web.connect();
 }
+
+// Focus tools
+export const listTasks = b.listTasks;
+export const createTask = b.createTask;
+export const updateTask = b.updateTask;
+export const removeTask = b.removeTask;
+export const setRoundNote = b.setRoundNote;
+export const getGoalProgress = b.getGoalProgress;
+export const getTaskTotals = b.getTaskTotals;
+export const getSessionsOn = b.getSessionsOn;
+export const onTasksChanged = b.onTasksChanged;
+export const onTimerOvertime = b.onTimerOvertime;
+export const ambientPreview = b.ambientPreview;
+export const setAmbientCustom = b.setAmbientCustom;
+export const setAmbientCustomBytes = b.setAmbientCustomBytes;
+export const clearAmbientCustom = b.clearAmbientCustom;

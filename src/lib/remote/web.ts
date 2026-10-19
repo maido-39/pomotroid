@@ -19,6 +19,10 @@ import type {
   HeatmapStats,
   RemoteStatus,
   AudioCueKey,
+  Task,
+  GoalProgress,
+  TaskTotal,
+  SessionEntry,
 } from '$lib/types';
 
 type Listener = (payload: unknown) => void;
@@ -318,6 +322,12 @@ function handleEvent(msg: Record<string, unknown>) {
     case 'sessionsChanged':
       emit('sessions:changed', undefined);
       break;
+    case 'tasksChanged':
+      emit('tasks:changed', p);
+      break;
+    case 'overtime':
+      emit('timer:overtime', p);
+      break;
     case 'error':
       console.warn('[web] desktop error:', msg.message);
       break;
@@ -521,3 +531,30 @@ export const onThemePreview = sub<Record<string, string> | null>('theme:preview'
 export const onRemoteStatus = sub<RemoteStatus>('remote:status');
 export const onWebsocketClients = sub<{ connected: number; authed: number }>('websocket:clients');
 export const onAudioUnlocked = sub<void>('web:audio-unlocked');
+
+// --- Focus tools (same names as $lib/ipc) ---
+
+const focus = <T>(op: string, args: Record<string, unknown> = {}) =>
+  payload<T>({ type: 'focus', op, ...args });
+
+export const listTasks = (archived = false) => focus<Task[]>('tasks', { archived });
+export const createTask = (name: string, color = '') => focus<Task>('createTask', { name, color });
+export const updateTask = (id: number, name: string, color = '') =>
+  focus<Task>('updateTask', { id, name, color });
+export const removeTask = (id: number) => focus<boolean>('removeTask', { id });
+export const setRoundNote = (note: string) => focus<boolean>('setNote', { note });
+export const getGoalProgress = () => focus<GoalProgress>('goal');
+export const getTaskTotals = (days: number) => focus<TaskTotal[]>('taskTotals', { days });
+export const getSessionsOn = (day: string) => focus<SessionEntry[]>('sessionsOn', { day });
+export const onTasksChanged = sub<Task[]>('tasks:changed');
+export const onTimerOvertime = sub<{ total_secs: number }>('timer:overtime');
+
+// The focus sound plays where the timer runs: on the desktop.
+export const ambientPreview = async (_on: boolean) => {};
+export const setAmbientCustom = async (_srcPath: string): Promise<string> => {
+  throw new Error('choose the focus sound on the desktop');
+};
+export const setAmbientCustomBytes = async (_name: string, _dataB64: string): Promise<string> => {
+  throw new Error('choose the focus sound on the desktop');
+};
+export const clearAmbientCustom = async () => {};

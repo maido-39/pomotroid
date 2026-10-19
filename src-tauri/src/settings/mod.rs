@@ -42,9 +42,9 @@ impl Preset {
         }
         Some(Self {
             name,
-            work_secs: self.work_secs.clamp(60, 4 * 3600),
-            short_break_secs: self.short_break_secs.clamp(60, 4 * 3600),
-            long_break_secs: self.long_break_secs.clamp(60, 4 * 3600),
+            work_secs: self.work_secs.clamp(60, 5400),
+            short_break_secs: self.short_break_secs.clamp(60, 5400),
+            long_break_secs: self.long_break_secs.clamp(60, 5400),
             long_break_interval: self.long_break_interval.clamp(1, 12),
         })
     }

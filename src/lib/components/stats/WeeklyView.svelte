@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { DayStat, StreakInfo } from '$lib/types';
+  import FocusBreakdown from './FocusBreakdown.svelte';
   import * as m from '$paraglide/messages.js';
   import { getLocale } from '$paraglide/runtime.js';
 
@@ -124,6 +125,7 @@
       </div>
     {/if}
   </div>
+  <FocusBreakdown days={7} />
 </div>
 
 <style>

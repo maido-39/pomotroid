@@ -40,6 +40,7 @@
     label: () => m.customize_el_label(),
     controls: () => m.customize_el_controls(),
     footer: () => m.customize_el_footer(),
+    info: () => m.customize_el_info(),
   };
   const LANE_LABEL: Record<LayoutLane, () => string> = {
     above: () => m.customize_lane_above(),

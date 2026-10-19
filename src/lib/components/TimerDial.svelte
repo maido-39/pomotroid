@@ -5,6 +5,7 @@
   import { tweened } from 'svelte/motion';
   import { cubicOut } from 'svelte/easing';
   import type { TimerState } from '$lib/types';
+  import { progressOf } from '$lib/utils/clock';
 
   interface Props {
     snap: TimerState;
@@ -32,7 +33,8 @@
 
   $effect(() => {
     const rt = snap.round_type;
-    const progress = snap.total_secs > 0 ? snap.elapsed_secs / snap.total_secs : 0;
+    // Held to 0–1: a flow round past its end must not wind the arc round again.
+    const progress = progressOf(snap);
 
     // Elapsed mode: arc grows from empty → full (offset counts down to 0).
     // Countdown mode: arc shrinks from full → empty (offset counts up to CIRCUMFERENCE).

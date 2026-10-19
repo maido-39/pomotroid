@@ -15,6 +15,7 @@
   import SettingsTitlebar from '$lib/components/settings/SettingsTitlebar.svelte';
   import Backdrop from '$lib/components/Backdrop.svelte';
   import TimerSection from '$lib/components/settings/sections/TimerSection.svelte';
+  import FocusSection from '$lib/components/settings/sections/FocusSection.svelte';
   import AppearanceSection from '$lib/components/settings/sections/AppearanceSection.svelte';
   import NotificationsSection from '$lib/components/settings/sections/NotificationsSection.svelte';
   import ShortcutsSection from '$lib/components/settings/sections/ShortcutsSection.svelte';
@@ -28,6 +29,7 @@
   type Section =
     | 'connect'
     | 'timer'
+    | 'focus'
     | 'appearance'
     | 'customize'
     | 'notifications'
@@ -40,6 +42,7 @@
   const SECTIONS: { id: Section; label: () => string }[] = [
     ...(useInAppNav ? [{ id: 'connect' as Section, label: m.nav_connect }] : []),
     { id: 'timer', label: m.nav_timer },
+    { id: 'focus', label: m.nav_focus },
     { id: 'appearance', label: m.nav_appearance },
     { id: 'customize', label: m.nav_customize },
     { id: 'notifications', label: m.nav_notifications },
@@ -176,6 +179,8 @@
         <ConnectSection />
       {:else if active === 'timer'}
         <TimerSection />
+      {:else if active === 'focus'}
+        <FocusSection />
       {:else if active === 'appearance'}
         <AppearanceSection />
       {:else if active === 'customize'}

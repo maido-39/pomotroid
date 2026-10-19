@@ -20,6 +20,10 @@ import type {
   DetailedStats,
   HeatmapStats,
   UpdateInfo,
+  Task,
+  GoalProgress,
+  TaskTotal,
+  SessionEntry,
 } from '$lib/types';
 
 // --- Timer commands ---
@@ -294,3 +298,30 @@ export const onRemoteStatus = (cb: (status: RemoteStatus) => void): Promise<Unli
 /** Number of WebSocket clients connected to this desktop. */
 export const onWebsocketClients = (cb: (c: WsClients) => void): Promise<UnlistenFn> =>
   listen<WsClients>('websocket:clients', (e) => cb(e.payload));
+
+// --- Focus tools ---
+
+/** Tasks in creation order; archived ones only when asked for. */
+export const listTasks = (archived = false) => invoke<Task[]>('tasks_list', { archived });
+/** Create a task; a name that exists already brings that task back. */
+export const createTask = (name: string, color = '') => invoke<Task>('tasks_create', { name, color });
+export const updateTask = (id: number, name: string, color = '') =>
+  invoke<Task>('tasks_update', { id, name, color });
+/** Remove a task from the switcher: archived if it has rounds, deleted otherwise. */
+export const removeTask = (id: number) => invoke<boolean>('tasks_remove', { id });
+/** Attach a note to the focus round that ended last. */
+export const setRoundNote = (note: string) => invoke<boolean>('sessions_set_note', { note });
+export const getGoalProgress = () => invoke<GoalProgress>('focus_goal');
+export const getTaskTotals = (days: number) => invoke<TaskTotal[]>('stats_task_totals', { days });
+export const getSessionsOn = (day: string) => invoke<SessionEntry[]>('stats_sessions_on', { day });
+export const onTasksChanged = (cb: (tasks: Task[]) => void): Promise<UnlistenFn> =>
+  listen<Task[]>('tasks:changed', (e) => cb(e.payload));
+export const onTimerOvertime = (cb: (p: { total_secs: number }) => void): Promise<UnlistenFn> =>
+  listen<{ total_secs: number }>('timer:overtime', (e) => cb(e.payload));
+
+/** Hold the focus sound on for auditioning, or let it go. */
+export const ambientPreview = (on: boolean) => invoke<void>('ambient_preview', { on });
+export const setAmbientCustom = (srcPath: string) => invoke<string>('ambient_set_custom', { srcPath });
+export const setAmbientCustomBytes = (name: string, dataB64: string) =>
+  invoke<string>('ambient_set_custom_bytes', { name, dataB64 });
+export const clearAmbientCustom = () => invoke<void>('ambient_clear_custom');

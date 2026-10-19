@@ -1,7 +1,7 @@
 import type { Layout } from '$lib/types';
 
 /** The parts of the timer a user can move or hide. Mirrors Rust `LAYOUT_ELEMENTS`. */
-export const LAYOUT_ELEMENTS = ['label', 'controls', 'footer'] as const;
+export const LAYOUT_ELEMENTS = ['label', 'controls', 'footer', 'info'] as const;
 export type LayoutElement = (typeof LAYOUT_ELEMENTS)[number];
 
 /** The lanes an element can sit in. */
@@ -11,7 +11,7 @@ export type LayoutLane = (typeof LAYOUT_LANES)[number];
 /** The arrangement the app has always had: everything under the clock. */
 export const DEFAULT_LAYOUT: Layout = {
   above: [],
-  below: ['label', 'controls', 'footer'],
+  below: ['label', 'controls', 'footer', 'info'],
   hidden: [],
 };
 

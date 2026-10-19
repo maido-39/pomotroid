@@ -62,6 +62,19 @@ export interface Settings {
   bg_shuffle: boolean; // walk the folder shuffled rather than by file name
   bg_rotate_on_round: boolean;
   bg_rotate_mins: number; // 0 = no clock-driven rotation
+  /** Completed focus rounds aimed for each day; 0 = no goal. */
+  daily_goal: number;
+  /** Let a focus round run past its end until the user moves on. */
+  flow_mode: boolean;
+  /** 'off' | 'white' | 'pink' | 'brown' | 'rain' | 'waves' | 'custom' */
+  ambient_sound: string;
+  ambient_volume: number; // 0–100
+  ambient_in_breaks: boolean;
+  ambient_custom_name: string; // '' = none
+  presets: Preset[];
+  /** Task new focus rounds are recorded against; 0 = none. */
+  active_task: number;
+  notes_prompt: boolean;
   theme_mode: string; // 'auto' | 'light' | 'dark'
   theme_light: string;
   theme_dark: string;
@@ -167,6 +180,53 @@ export interface BackgroundInfo extends Framing {
   data_url: string;
   /** Identity this image's framing is stored under. */
   key: string;
+}
+
+/** A named set of durations. Mirrors Rust `Preset`. */
+export interface Preset {
+  name: string;
+  work_secs: number;
+  short_break_secs: number;
+  long_break_secs: number;
+  long_break_interval: number;
+}
+
+/** Mirrors Rust `db::focus::Task`. */
+export interface Task {
+  id: number;
+  name: string;
+  /** '#rrggbb', or '' for the theme accent. */
+  color: string;
+  archived: boolean;
+}
+
+/** Mirrors Rust `db::focus::GoalProgress`. */
+export interface GoalProgress {
+  goal: number;
+  today: number;
+  streak: { current: number; longest: number };
+}
+
+/** Mirrors Rust `db::focus::TaskTotal`. */
+export interface TaskTotal {
+  task_id: number | null;
+  name: string | null;
+  color: string;
+  rounds: number;
+  focus_secs: number;
+}
+
+/** Mirrors Rust `db::focus::SessionEntry`. */
+export interface SessionEntry {
+  id: number;
+  started_at: number;
+  ended_at: number | null;
+  round_type: string;
+  duration_secs: number;
+  completed: boolean;
+  task: string | null;
+  task_color: string;
+  note: string | null;
 }
 
 /** Where each movable part of the timer sits. Mirrors Rust `Layout`: every

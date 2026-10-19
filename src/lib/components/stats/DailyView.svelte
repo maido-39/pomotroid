@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { DailyStats } from '$lib/types';
+  import FocusBreakdown from './FocusBreakdown.svelte';
   import * as m from '$paraglide/messages.js';
 
   let { today }: { today: DailyStats | null } = $props();
@@ -94,6 +95,7 @@
       </svg>
     </div>
   </div>
+  <FocusBreakdown days={1} />
 </div>
 
 <style>

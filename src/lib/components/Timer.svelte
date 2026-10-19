@@ -12,6 +12,7 @@
     onTimerResumed,
     onRoundChange,
     onTimerReset,
+    onTimerOvertime,
   } from '$lib/backend';
   import { timerState } from '$lib/stores/timer';
   import { settings } from '$lib/stores/settings';
@@ -19,6 +20,7 @@
   import Clock from './clock/Clock.svelte';
   import { DEFAULT_LAYOUT, groupsOf } from '$lib/utils/layout';
   import TimerFooter from './TimerFooter.svelte';
+  import TimerInfo from './TimerInfo.svelte';
   import MiniControls from './MiniControls.svelte';
   import Tooltip from './Tooltip.svelte';
   import { disposable } from '$lib/utils/listeners';
@@ -113,6 +115,14 @@
       })
     );
     scope.add(onTimerReset((snap) => timerState.set(snap)));
+    // Flow mode: the round is over but keeps going until the user moves on.
+    scope.add(
+      onTimerOvertime(() => {
+        if ($settings.notifications_enabled) {
+          notificationShow(m.notification_overtime_title(), m.notification_overtime_body()).catch(() => {});
+        }
+      })
+    );
 
     getTimerState()
       .then((initial) => {
@@ -189,6 +199,8 @@
     <div class="controls-wrapper">
       <TimerFooter snap={state} />
     </div>
+  {:else if parts[0] === 'info'}
+    <TimerInfo snap={state} />
   {/if}
 {/snippet}
 

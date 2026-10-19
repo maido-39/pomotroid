@@ -11,13 +11,19 @@ export function remainingSecs(snap: TimerState): number {
   return Math.max(0, snap.total_secs - snap.elapsed_secs);
 }
 
-/** `MM:SS` for the time left. Minutes are not capped at 60: a 90-minute round
- *  should read `90:00`, not `30:00`. */
+/** Seconds past the planned end — flow mode lets a focus round run on. */
+export function overtimeSecs(snap: TimerState): number {
+  return Math.max(0, snap.elapsed_secs - snap.total_secs);
+}
+
+/** `MM:SS` for the time left, or `+MM:SS` past the end in flow mode. Minutes
+ *  are not capped at 60: a 90-minute round should read `90:00`, not `30:00`. */
 export function remainingLabel(snap: TimerState): string {
-  const left = remainingSecs(snap);
-  const mm = String(Math.floor(left / 60)).padStart(2, '0');
-  const ss = String(left % 60).padStart(2, '0');
-  return `${mm}:${ss}`;
+  const over = overtimeSecs(snap);
+  const secs = over > 0 ? over : remainingSecs(snap);
+  const mm = String(Math.floor(secs / 60)).padStart(2, '0');
+  const ss = String(secs % 60).padStart(2, '0');
+  return over > 0 ? `+${mm}:${ss}` : `${mm}:${ss}`;
 }
 
 /** The two halves of `MM:SS`, for styles that draw them as separate pieces. */
