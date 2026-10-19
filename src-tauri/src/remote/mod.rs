@@ -341,6 +341,7 @@ pub fn connect(app: &AppHandle, host: String, port: u16, token: String) -> Resul
     if let Some(timer) = app.try_state::<TimerController>() {
         timer.pause();
     }
+    crate::commands::refresh_ambient(app);
 
     // Remember the target for next time.
     if let Some(db) = app.try_state::<crate::db::DbState>() {
@@ -415,6 +416,7 @@ pub fn disconnect(app: &AppHandle) {
         let _ = app.emit("themes:changed", &themes);
     }
     let _ = app.emit("background:changed", ());
+    crate::commands::refresh_ambient(app);
 }
 
 /// Last pairing target saved on this device, if any.
@@ -757,6 +759,12 @@ fn handle_event(app: &AppHandle, st: &Arc<RemoteState>, out_tx: &mpsc::Unbounded
         }
         "themes" | "themesChanged" => {
             let _ = app.emit("themes:changed", payload);
+        }
+        "tasksChanged" => {
+            let _ = app.emit("tasks:changed", payload);
+        }
+        "overtime" => {
+            let _ = app.emit("timer:overtime", payload);
         }
         "backgroundChanged" => {
             let _ = app.emit("background:changed", ());

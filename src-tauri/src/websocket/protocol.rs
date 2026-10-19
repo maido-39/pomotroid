@@ -32,6 +32,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::audio::CustomAudioInfo;
+use crate::db::focus::Task;
 use crate::settings::Settings;
 use crate::themes::Theme;
 use crate::timer::TimerSnapshot;
@@ -90,6 +91,10 @@ pub enum WsEvent {
     AudioChanged { payload: String },
     AudioInfoChanged { payload: CustomAudioInfo },
     SessionsChanged,
+    /// The active (non-archived) task list changed.
+    TasksChanged { payload: Vec<Task> },
+    /// A flow-mode focus round passed its planned end and keeps running.
+    Overtime { payload: StartedPayload },
 }
 
 impl WsEvent {
@@ -103,6 +108,7 @@ impl WsEvent {
                 | WsEvent::Resumed { .. }
                 | WsEvent::Reset { .. }
                 | WsEvent::Tick { .. }
+                | WsEvent::Overtime { .. }
         )
     }
 }

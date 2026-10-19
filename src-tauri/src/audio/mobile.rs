@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Manager};
 
+use super::ambient::{self, Spec};
 use super::pool;
 use super::common::{
     resolve_source, AudioCue, AudioSource, CustomAudioInfo, SoundSelection,
@@ -50,6 +51,8 @@ pub struct AudioManager {
     app: Mutex<Option<AppHandle>>,
     /// cache key → file already written to the cache dir.
     written: Mutex<HashMap<String, PathBuf>>,
+    /// What the native focus-sound player was last told to play.
+    ambient: Mutex<Option<(Spec, f32)>>,
 }
 
 impl AudioManager {
@@ -60,6 +63,7 @@ impl AudioManager {
             picker: Arc::new(Mutex::new(pool::Picker::default())),
             app: Mutex::new(None),
             written: Mutex::new(HashMap::new()),
+            ambient: Mutex::new(None),
         }))
     }
 
@@ -161,6 +165,45 @@ impl AudioManager {
         }
         written.insert(key.to_string(), path.clone());
         Ok(path)
+    }
+
+    /// Play `want` as the focus sound through the native looping player, or
+    /// stop it. Generated sounds are rendered once per kind into a seamless
+    /// 30-second loop in the cache.
+    pub fn set_ambient(&self, want: Option<(Spec, f32)>) {
+        let mut current = self.ambient.lock().unwrap();
+        if *current == want {
+            return;
+        }
+        let Some(app) = self.app.lock().unwrap().clone() else { return };
+        let result = match &want {
+            None => crate::mobile::timer_service::stop_ambient(&app),
+            Some((spec, volume)) => {
+                let path = match spec {
+                    Spec::Custom(p) => Ok(p.clone()),
+                    Spec::Generated(kind) => {
+                        let key = format!("ambient-{}", kind.key());
+                        let staged = self.written.lock().unwrap().get(&key).filter(|p| p.exists()).cloned();
+                        match staged {
+                            Some(p) => Ok(p),
+                            None => {
+                                let src = AudioSource {
+                                    bytes: ambient::render_loop_wav(*kind, 30, 22_050),
+                                    mime: "audio/wav",
+                                    origin: "ambient".into(),
+                                };
+                                self.ensure_file(&app, &key, &src)
+                            }
+                        }
+                    }
+                };
+                path.and_then(|p| crate::mobile::timer_service::play_ambient(&app, &p, *volume))
+            }
+        };
+        match result {
+            Ok(()) => *current = want,
+            Err(e) => log::warn!("[audio] focus sound: {e}"),
+        }
     }
 
     pub fn tick_enabled_for(&self, round_type: &str) -> bool {

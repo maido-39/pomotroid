@@ -127,6 +127,12 @@ mod imp {
         Err("native playback is only available on mobile".into())
     }
     pub fn stop(_app: &AppHandle) {}
+    pub fn play_ambient(_app: &AppHandle, _path: &std::path::Path, _volume: f32) -> Result<(), String> {
+        Err("native playback is only available on mobile".into())
+    }
+    pub fn stop_ambient(_app: &AppHandle) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 #[cfg(mobile)]
@@ -279,6 +285,29 @@ mod imp {
         )
         .map(|_| ())
         .map_err(|e| e.to_string())
+    }
+
+    /// Loop a file as the focus sound; calling again with the same path only
+    /// changes the volume.
+    pub fn play_ambient(app: &AppHandle, path: &std::path::Path, volume: f32) -> Result<(), String> {
+        let h = app
+            .try_state::<TimerServiceHandle>()
+            .ok_or_else(|| "timer service plugin not registered".to_string())?;
+        h.0.run_mobile_plugin::<serde_json::Value>(
+            "playAmbient",
+            serde_json::json!({ "path": path.to_string_lossy(), "volume": volume }),
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    }
+
+    pub fn stop_ambient(app: &AppHandle) -> Result<(), String> {
+        let h = app
+            .try_state::<TimerServiceHandle>()
+            .ok_or_else(|| "timer service plugin not registered".to_string())?;
+        h.0.run_mobile_plugin::<serde_json::Value>("stopAmbient", serde_json::json!({}))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     pub fn stop(app: &AppHandle) {

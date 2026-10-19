@@ -212,6 +212,12 @@ impl TimerController {
         wants_always_on_top(&settings, round)
     }
 
+    /// The round being timed and whether it is counting right now.
+    pub fn round_and_running(&self) -> (RoundType, bool) {
+        let round = self.sequence.lock().unwrap().current_round;
+        (round, self.shared.lock().unwrap().is_running)
+    }
+
     pub fn get_snapshot(&self) -> TimerSnapshot {
         let seq = self.sequence.lock().unwrap();
         let settings = self.settings.lock().unwrap();
@@ -292,6 +298,7 @@ fn listen_events(
                 }
                 tray::update_menu_items(&tray, true, false);
                 crate::mobile::timer_service::update(&app, &build_snapshot(&sequence, &settings, &shared));
+                crate::commands::refresh_ambient(&app);
             }
 
             TimerEvent::Tick { elapsed_secs, total_secs } => {
@@ -454,6 +461,8 @@ fn listen_events(
 
                 // Native notification + foreground service on mobile.
                 crate::mobile::timer_service::round_changed(&app, &build_snapshot(&sequence, &settings, &shared));
+                // Quiet between rounds; an auto-started round brings it back.
+                crate::commands::refresh_ambient(&app);
 
                 // Auto-start if configured.
                 let should_auto = match next_round {
@@ -505,6 +514,7 @@ fn listen_events(
                 tray::update_icon(&tray, &rt, true, progress);
                 tray::update_menu_items(&tray, false, true);
                 crate::mobile::timer_service::update(&app, &build_snapshot(&sequence, &settings, &shared));
+                crate::commands::refresh_ambient(&app);
             }
 
             TimerEvent::Resumed { elapsed_secs } => {
@@ -527,6 +537,7 @@ fn listen_events(
                 last_tray_progress = progress;
                 tray::update_menu_items(&tray, true, false);
                 crate::mobile::timer_service::update(&app, &build_snapshot(&sequence, &settings, &shared));
+                crate::commands::refresh_ambient(&app);
             }
 
             TimerEvent::Reset => {
@@ -575,6 +586,7 @@ fn listen_events(
                 tray::update_icon(&tray, &rt, false, 0.0);
                 last_tray_progress = -1.0;
                 tray::update_menu_items(&tray, false, false);
+                crate::commands::refresh_ambient(&app);
             }
 
             TimerEvent::Suspended { elapsed_secs } => {
@@ -594,6 +606,7 @@ fn listen_events(
                 };
                 let progress = if total > 0 { elapsed_secs as f32 / total as f32 } else { 0.0 };
                 tray::update_icon(&tray, &rt, true, progress);
+                crate::commands::refresh_ambient(&app);
             }
         }
     }

@@ -73,6 +73,8 @@ pub trait Backend: Send + Sync {
     /// Remove one sound from a cue's pool.
     fn remove_audio(&self, cue: AudioCue, name: &str) -> Result<(), String>;
     fn audio_info(&self) -> Result<CustomAudioInfo, String>;
+    /// Tasks, notes and the daily goal; see `commands::focus_impl`.
+    fn focus(&self, op: &str, args: &Value) -> Result<Value, String>;
     fn app_info(&self) -> AppInfo;
 }
 
@@ -185,6 +187,10 @@ impl Backend for AppBackend {
         commands::audio_info_impl(&self.app)
     }
 
+    fn focus(&self, op: &str, args: &Value) -> Result<Value, String> {
+        commands::focus_impl(&self.app, op, args)
+    }
+
     fn app_info(&self) -> AppInfo {
         AppInfo {
             name: "Pomotroid".into(),
@@ -290,6 +296,18 @@ impl WsState {
         let tx = self.broadcast_tx.clone();
         app.listen("sessions:changed", move |_| {
             let _ = tx.send(WsEvent::SessionsChanged);
+        });
+        let tx = self.broadcast_tx.clone();
+        app.listen("tasks:changed", move |event| {
+            if let Ok(tasks) = serde_json::from_str(event.payload()) {
+                let _ = tx.send(WsEvent::TasksChanged { payload: tasks });
+            }
+        });
+        let tx = self.broadcast_tx.clone();
+        app.listen("timer:overtime", move |event| {
+            if let Ok(payload) = serde_json::from_str(event.payload()) {
+                let _ = tx.send(WsEvent::Overtime { payload });
+            }
         });
     }
 
@@ -722,6 +740,10 @@ pub fn handle_client_message(text: &str, backend: &dyn Backend, ctx: &ConnCtx) -
                 backend.clear_sessions()?;
                 reply("ok", id, None)
             }
+            "focus" => {
+                let op = str_field(&msg, "op")?;
+                reply("ok", id, Some(backend.focus(op, &msg)?))
+            }
             "getBackground" => reply("background", id, Some(json!(backend.get_background()?))),
             "setBackground" => {
                 let name = str_field(&msg, "name")?;
@@ -1141,6 +1163,14 @@ mod tests {
         fn audio_info(&self) -> Result<CustomAudioInfo, String> {
             Ok(CustomAudioInfo::default())
         }
+        fn focus(&self, op: &str, args: &Value) -> Result<Value, String> {
+            self.calls.lock().unwrap().push(format!("focus:{op}"));
+            match op {
+                "tasks" => Ok(json!([])),
+                "setNote" => Ok(json!(!args.get("note").and_then(|n| n.as_str()).unwrap_or("").is_empty())),
+                _ => Err(format!("unknown focus operation '{op}'")),
+            }
+        }
         fn app_info(&self) -> AppInfo {
             AppInfo { name: "Pomotroid".into(), version: "test".into(), hostname: "unit".into() }
         }
@@ -1462,5 +1492,30 @@ mod tests {
         let TungMessage::Text(text) = ws.next().await.unwrap().unwrap() else { panic!("text") };
         let v: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["type"], "backgroundChanged");
+    }
+
+    #[test]
+    fn focus_requests_reach_the_backend_with_their_arguments() {
+        let b = MockBackend::default();
+        let c = ctx("t", false);
+        handle_client_message(r#"{"type":"auth","token":"t","id":0}"#, &b, &c);
+        let v = parse(handle_client_message(r#"{"type":"focus","op":"setNote","note":"wrote the intro","id":3}"#, &b, &c));
+        assert_eq!(v["type"], "ok");
+        assert_eq!(v["id"], 3);
+        assert_eq!(v["payload"], true);
+        let e = parse(handle_client_message(r#"{"type":"focus","op":"nope","id":4}"#, &b, &c));
+        assert_eq!(e["type"], "error");
+        let missing = parse(handle_client_message(r#"{"type":"focus","id":5}"#, &b, &c));
+        assert_eq!(missing["type"], "error", "an op is required");
+        assert!(b.calls.lock().unwrap().contains(&"focus:setNote".to_string()));
+    }
+
+    #[test]
+    fn focus_requests_need_authentication() {
+        let b = MockBackend::default();
+        let c = ctx("t", false);
+        let v = parse(handle_client_message(r#"{"type":"focus","op":"tasks","id":1}"#, &b, &c));
+        assert_eq!(v["type"], "error");
+        assert!(b.calls.lock().unwrap().is_empty());
     }
 }

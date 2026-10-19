@@ -54,9 +54,18 @@ class PlaySoundArgs {
     var volume: Float = 1.0f
 }
 
+@InvokeArg
+class PlayAmbientArgs {
+    var path: String = ""
+    var volume: Float = 0.3f
+}
+
 @TauriPlugin
 class TimerServicePlugin(private val activity: Activity) : Plugin(activity) {
     private var player: MediaPlayer? = null
+    /** Looping focus sound, separate from the alert player above. */
+    private var ambient: MediaPlayer? = null
+    private var ambientPath: String? = null
 
     private fun notificationsAllowed(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
@@ -150,6 +159,56 @@ class TimerServicePlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    /** Loop a file as the focus sound. The same path again only changes the volume. */
+    @Command
+    fun playAmbient(invoke: Invoke) {
+        val args = invoke.parseArgs(PlayAmbientArgs::class.java)
+        val v = args.volume.coerceIn(0f, 1f)
+        try {
+            val current = ambient
+            if (current != null && ambientPath == args.path) {
+                current.setVolume(v, v)
+                invoke.resolve()
+                return
+            }
+            val file = File(args.path)
+            if (!file.exists()) {
+                invoke.reject("sound file not found: ${args.path}")
+                return
+            }
+            releaseAmbient()
+            val mp = MediaPlayer()
+            try {
+                mp.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                )
+                mp.setDataSource(file.absolutePath)
+                mp.isLooping = true
+                mp.setVolume(v, v)
+                mp.prepare()
+                mp.start()
+            } catch (e: Exception) {
+                mp.release()
+                throw e
+            }
+            ambient = mp
+            ambientPath = args.path
+            invoke.resolve()
+        } catch (e: Exception) {
+            Log.w(TAG, "playAmbient failed", e)
+            invoke.reject(e.message ?: "playAmbient failed")
+        }
+    }
+
+    @Command
+    fun stopAmbient(invoke: Invoke) {
+        releaseAmbient()
+        invoke.resolve()
+    }
+
     /**
      * Hand Rust the notification-action taps queued since the last call, as a
      * comma-separated list. Rust polls this because Tauri's `trigger()` only
@@ -168,6 +227,7 @@ class TimerServicePlugin(private val activity: Activity) : Plugin(activity) {
         try {
             activity.stopService(Intent(activity, TimerForegroundService::class.java))
             releasePlayer()
+            releaseAmbient()
             invoke.resolve()
         } catch (e: Exception) {
             invoke.reject(e.message ?: "stop failed")
@@ -179,6 +239,14 @@ class TimerServicePlugin(private val activity: Activity) : Plugin(activity) {
     private fun releasePlayer() {
         val p = player ?: return
         player = null
+        try { p.stop() } catch (_: Exception) {}
+        p.release()
+    }
+
+    private fun releaseAmbient() {
+        val p = ambient ?: return
+        ambient = null
+        ambientPath = null
         try { p.stop() } catch (_: Exception) {}
         p.release()
     }

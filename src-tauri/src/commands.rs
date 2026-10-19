@@ -11,7 +11,7 @@
 /// (Android "connect to desktop" mode), the request is executed on the
 /// desktop instead of locally.
 use log::LevelFilter;
-use serde_json::json;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use std::sync::Arc;
@@ -258,6 +258,11 @@ pub fn settings_set_impl(app: &AppHandle, key: &str, value: &str) -> Result<Sett
         shortcuts::register_all(app, &new_settings);
     }
 
+    // The focus sound follows its settings straight away.
+    if key.starts_with("ambient_") || key == "flow_mode" {
+        refresh_ambient(app);
+    }
+
     // Start or stop the WebSocket server when its configuration changes.
     if matches!(key, "websocket_enabled" | "websocket_port" | "websocket_lan_enabled" | "websocket_token") {
         restart_websocket(app, Arc::clone(&*ws_state));
@@ -361,6 +366,10 @@ pub fn settings_reset_impl(app: &AppHandle) -> Result<Settings, String> {
         log::info!("[audio] custom sounds cleared on settings reset");
         app.emit("audio:changed", "all").ok();
     }
+
+    // The custom focus sound goes with the settings that pointed at it.
+    let _ = std::fs::remove_dir_all(audio::ambient::custom_dir(&data_dir.join("audio")));
+    refresh_ambient(app);
 
     // Drop every added font, and with it any choice pointing at one.
     if let Err(e) = crate::fonts::clear(&crate::fonts::dir(&data_dir)) {
@@ -530,6 +539,259 @@ pub fn sessions_clear(app: AppHandle) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 // CMD-05 — Stats commands
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Focus sound (audio::ambient)
+// ---------------------------------------------------------------------------
+
+/// Set while the Settings preview button is held down: the chosen sound plays
+/// whatever the timer is doing.
+static AMBIENT_PREVIEW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Bring the focus sound in line with the timer and the settings. Cheap and
+/// idempotent; called on every timer state change and every focus-sound
+/// setting change.
+pub fn refresh_ambient(app: &AppHandle) {
+    let Some(audio) = app.try_state::<Arc<AudioManager>>() else { return };
+    // Following a desktop: the sound belongs to the desktop's timer, which
+    // this device is not running.
+    if remote::is_active(app) {
+        audio.set_ambient(None);
+        return;
+    }
+    let (Some(timer), Ok(settings)) = (app.try_state::<TimerController>(), settings_get_impl(app)) else {
+        return;
+    };
+    let custom = audio_dir(app).ok().and_then(|d| audio::ambient::custom_file(&d));
+    let want = if AMBIENT_PREVIEW.load(std::sync::atomic::Ordering::Relaxed) {
+        // Preview as if a focus round were running.
+        audio::ambient::wanted(&settings, crate::timer::sequence::RoundType::Work, true, custom)
+    } else {
+        let (round, running) = timer.round_and_running();
+        audio::ambient::wanted(&settings, round, running, custom)
+    };
+    audio.set_ambient(want);
+}
+
+/// Hold the focus sound on (or let it go) for auditioning in Settings.
+#[tauri::command]
+pub fn ambient_preview(app: AppHandle, on: bool) -> Result<(), String> {
+    AMBIENT_PREVIEW.store(on, std::sync::atomic::Ordering::Relaxed);
+    refresh_ambient(&app);
+    Ok(())
+}
+
+fn ambient_store(app: &AppHandle, name: &str, bytes: &[u8]) -> Result<String, String> {
+    if bytes.len() > MAX_UPLOAD_BYTES {
+        return Err(format!("file too large (max {} MB)", MAX_UPLOAD_BYTES / 1024 / 1024));
+    }
+    let dir = audio::ambient::custom_dir(&audio_dir(app)?);
+    let display = file_display_name(name, "focus-sound");
+    let ext = std::path::Path::new(&display)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    // Written beside the old one and only swapped in once it is known to play.
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let staged = dir.join(format!(".incoming.{ext}"));
+    std::fs::write(&staged, bytes).map_err(|e| e.to_string())?;
+    if let Err(e) = audio::probe_audio_file(&staged) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(e);
+    }
+    for old in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+        if old.path() != staged {
+            let _ = std::fs::remove_file(old.path());
+        }
+    }
+    std::fs::rename(&staged, dir.join(format!("custom.{ext}"))).map_err(|e| e.to_string())?;
+    settings_set_impl(app, "ambient_custom_name", &display)?;
+    settings_set_impl(app, "ambient_sound", "custom")?;
+    log::info!("[audio] focus sound set to {display}");
+    Ok(display)
+}
+
+fn not_while_following(app: &AppHandle) -> Result<(), String> {
+    if remote::is_active(app) {
+        return Err("choose the focus sound on the desktop you are following".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn ambient_set_custom(app: AppHandle, src_path: String) -> Result<String, String> {
+    not_while_following(&app)?;
+    let path = std::path::PathBuf::from(&src_path);
+    let bytes = std::fs::read(&path).map_err(|e| format!("cannot read file: {e}"))?;
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("focus-sound");
+    ambient_store(&app, name, &bytes)
+}
+
+#[tauri::command]
+pub fn ambient_set_custom_bytes(app: AppHandle, name: String, data_b64: String) -> Result<String, String> {
+    not_while_following(&app)?;
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_b64.trim())
+        .map_err(|e| format!("invalid base64: {e}"))?;
+    ambient_store(&app, &name, &bytes)
+}
+
+#[tauri::command]
+pub fn ambient_clear_custom(app: AppHandle) -> Result<(), String> {
+    not_while_following(&app)?;
+    let dir = audio::ambient::custom_dir(&audio_dir(&app)?);
+    let _ = std::fs::remove_dir_all(&dir);
+    settings_set_impl(&app, "ambient_custom_name", "")?;
+    if settings_get_impl(&app)?.ambient_sound == "custom" {
+        settings_set_impl(&app, "ambient_sound", "off")?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Focus tools — tasks, notes, the daily goal (db::focus)
+// ---------------------------------------------------------------------------
+
+fn emit_tasks(app: &AppHandle, conn: &rusqlite::Connection) {
+    if let Ok(list) = crate::db::focus::list_tasks(conn, false) {
+        app.emit("tasks:changed", &list).ok();
+    }
+}
+
+fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
+    args.get(key).and_then(|v| v.as_str()).ok_or_else(|| format!("missing '{key}'"))
+}
+
+fn arg_i64(args: &Value, key: &str) -> Result<i64, String> {
+    args.get(key).and_then(|v| v.as_i64()).ok_or_else(|| format!("missing '{key}'"))
+}
+
+/// Every focus-tool operation, by name. The Tauri commands below, the
+/// WebSocket server and therefore a paired phone all go through here, so the
+/// three cannot drift apart.
+pub fn focus_impl(app: &AppHandle, op: &str, args: &Value) -> Result<Value, String> {
+    use crate::db::focus;
+    let db = app.state::<DbState>();
+    let to_json = |v: Result<Value, serde_json::Error>| v.map_err(|e| e.to_string());
+    match op {
+        "tasks" => {
+            let archived = args.get("archived").and_then(|v| v.as_bool()).unwrap_or(false);
+            let conn = db.lock().map_err(|e| e.to_string())?;
+            to_json(serde_json::to_value(focus::list_tasks(&conn, archived).map_err(|e| e.to_string())?))
+        }
+        "createTask" => {
+            let conn = db.lock().map_err(|e| e.to_string())?;
+            let task = focus::create_task(&conn, arg_str(args, "name")?, args.get("color").and_then(|v| v.as_str()).unwrap_or(""))?;
+            emit_tasks(app, &conn);
+            to_json(serde_json::to_value(task))
+        }
+        "updateTask" => {
+            let conn = db.lock().map_err(|e| e.to_string())?;
+            let task = focus::update_task(
+                &conn,
+                arg_i64(args, "id")?,
+                arg_str(args, "name")?,
+                args.get("color").and_then(|v| v.as_str()).unwrap_or(""),
+            )?;
+            emit_tasks(app, &conn);
+            to_json(serde_json::to_value(task))
+        }
+        "removeTask" => {
+            let id = arg_i64(args, "id")?;
+            let deleted = {
+                let conn = db.lock().map_err(|e| e.to_string())?;
+                let deleted = focus::remove_task(&conn, id).map_err(|e| e.to_string())?;
+                emit_tasks(app, &conn);
+                deleted
+            };
+            // A task that left the switcher cannot stay the one rounds go to.
+            if settings_get_impl(app)?.active_task == id {
+                settings_set_impl(app, "active_task", "0")?;
+            }
+            Ok(json!(deleted))
+        }
+        "setNote" => {
+            let saved = {
+                let conn = db.lock().map_err(|e| e.to_string())?;
+                focus::set_last_note(&conn, arg_str(args, "note")?).map_err(|e| e.to_string())?
+            };
+            if saved {
+                app.emit("sessions:changed", ()).ok();
+            }
+            Ok(json!(saved))
+        }
+        "goal" => {
+            let goal = settings_get_impl(app)?.daily_goal;
+            let conn = db.lock().map_err(|e| e.to_string())?;
+            to_json(serde_json::to_value(focus::goal_progress(&conn, goal).map_err(|e| e.to_string())?))
+        }
+        "taskTotals" => {
+            let days = args.get("days").and_then(|v| v.as_u64()).unwrap_or(1).min(3650) as u32;
+            let conn = db.lock().map_err(|e| e.to_string())?;
+            to_json(serde_json::to_value(focus::task_totals(&conn, days).map_err(|e| e.to_string())?))
+        }
+        "sessionsOn" => {
+            let day = arg_str(args, "day")?;
+            let conn = db.lock().map_err(|e| e.to_string())?;
+            to_json(serde_json::to_value(focus::sessions_on(&conn, day).map_err(|e| e.to_string())?))
+        }
+        _ => Err(format!("unknown focus operation '{op}'")),
+    }
+}
+
+/// Run `op` on the paired desktop in remote mode, locally otherwise.
+fn focus_call<T: serde::de::DeserializeOwned>(app: &AppHandle, op: &str, args: Value) -> Result<T, String> {
+    let mut msg = args.clone();
+    msg["type"] = json!("focus");
+    msg["op"] = json!(op);
+    if let Some(r) = remote::forward::<T>(app, msg) {
+        return r;
+    }
+    serde_json::from_value(focus_impl(app, op, &args)?).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn tasks_list(app: AppHandle, archived: bool) -> Result<Vec<crate::db::focus::Task>, String> {
+    focus_call(&app, "tasks", json!({ "archived": archived }))
+}
+
+#[tauri::command]
+pub fn tasks_create(app: AppHandle, name: String, color: String) -> Result<crate::db::focus::Task, String> {
+    focus_call(&app, "createTask", json!({ "name": name, "color": color }))
+}
+
+#[tauri::command]
+pub fn tasks_update(app: AppHandle, id: i64, name: String, color: String) -> Result<crate::db::focus::Task, String> {
+    focus_call(&app, "updateTask", json!({ "id": id, "name": name, "color": color }))
+}
+
+#[tauri::command]
+pub fn tasks_remove(app: AppHandle, id: i64) -> Result<bool, String> {
+    focus_call(&app, "removeTask", json!({ "id": id }))
+}
+
+#[tauri::command]
+pub fn sessions_set_note(app: AppHandle, note: String) -> Result<bool, String> {
+    focus_call(&app, "setNote", json!({ "note": note }))
+}
+
+#[tauri::command]
+pub fn focus_goal(app: AppHandle) -> Result<crate::db::focus::GoalProgress, String> {
+    focus_call(&app, "goal", json!({}))
+}
+
+#[tauri::command]
+pub fn stats_task_totals(app: AppHandle, days: u32) -> Result<Vec<crate::db::focus::TaskTotal>, String> {
+    focus_call(&app, "taskTotals", json!({ "days": days }))
+}
+
+#[tauri::command]
+pub fn stats_sessions_on(app: AppHandle, day: String) -> Result<Vec<crate::db::focus::SessionEntry>, String> {
+    focus_call(&app, "sessionsOn", json!({ "day": day }))
+}
+
 
 pub fn stats_detailed_impl(app: &AppHandle) -> Result<DetailedStats, String> {
     let db = app.state::<DbState>();

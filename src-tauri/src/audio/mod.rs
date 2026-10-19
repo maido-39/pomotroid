@@ -8,6 +8,7 @@
 pub mod common;
 pub use common::*;
 
+pub mod ambient;
 pub mod pool;
 
 #[cfg(desktop)]

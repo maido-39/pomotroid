@@ -12,11 +12,15 @@
 /// thread via `common::resolve_source`; the audio thread only ever receives
 /// decoded-ready bytes.
 use std::io::Cursor;
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use rodio::{Decoder, DeviceSinkBuilder, Player};
+use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
+
+use super::ambient::{self, Spec};
 
 use super::pool;
 use super::common::{
@@ -56,6 +60,9 @@ impl From<&Settings> for AudioSettings {
 /// Thread-safe audio manager. Register as `Arc<AudioManager>` in Tauri state.
 pub struct AudioManager {
     tx: mpsc::SyncSender<PlayRequest>,
+    /// Focus-sound thread; holds the latest wanted sound, so a burst of
+    /// changes collapses into one.
+    ambient_tx: mpsc::Sender<Option<(Spec, f32)>>,
     settings: Arc<Mutex<AudioSettings>>,
     pub picker: Arc<Mutex<pool::Picker>>,
 }
@@ -70,10 +77,16 @@ impl AudioManager {
             .name("audio".to_string())
             .spawn(move || audio_thread(rx))
             .ok()?;
+        let (ambient_tx, ambient_rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("ambient".to_string())
+            .spawn(move || ambient_thread(ambient_rx))
+            .ok()?;
 
         log::info!("[audio] initialized: volume={:.0}%", initial.volume * 100.0);
         Some(Arc::new(Self {
             tx,
+            ambient_tx,
             settings: Arc::new(Mutex::new(AudioSettings::from(initial))),
             picker: Arc::new(Mutex::new(pool::Picker::default())),
         }))
@@ -81,6 +94,13 @@ impl AudioManager {
 
     /// Desktop needs no app handle; provided for signature parity with mobile.
     pub fn attach(&self, _app: tauri::AppHandle) {}
+
+    /// Play `want` as the focus sound (or fall silent). Repeating the current
+    /// sound only changes its volume, so this is safe to call on every
+    /// timer event.
+    pub fn set_ambient(&self, want: Option<(Spec, f32)>) {
+        let _ = self.ambient_tx.send(want);
+    }
 
     /// Play arbitrary bytes (remote-mode sounds fetched from another Pomotroid).
     pub fn play_bytes(&self, bytes: Vec<u8>, volume: f32) {
@@ -205,6 +225,110 @@ fn audio_thread(rx: mpsc::Receiver<PlayRequest>) {
 }
 
 // ---------------------------------------------------------------------------
+// Focus-sound thread
+// ---------------------------------------------------------------------------
+
+const AMBIENT_RATE: u32 = 44_100;
+const FADE_IN: Duration = Duration::from_millis(900);
+const FADE_OUT: Duration = Duration::from_millis(500);
+
+/// The generator as a rodio source: mono, endless.
+struct GeneratedSource(ambient::Generator);
+
+impl Iterator for GeneratedSource {
+    type Item = rodio::Sample;
+    fn next(&mut self) -> Option<Self::Item> {
+        Some(self.0.next_sample() as rodio::Sample)
+    }
+}
+
+impl Source for GeneratedSource {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+    fn channels(&self) -> rodio::ChannelCount {
+        NonZero::new(1).unwrap()
+    }
+    fn sample_rate(&self) -> rodio::SampleRate {
+        NonZero::new(AMBIENT_RATE).unwrap()
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        None
+    }
+}
+
+struct Playing {
+    spec: Spec,
+    // Dropped after the player: the player feeds the sink's mixer.
+    player: Player,
+    _sink: rodio::MixerDeviceSink,
+}
+
+fn ramp(player: &Player, from: f32, to: f32, over: Duration) {
+    const STEPS: u32 = 15;
+    for i in 1..=STEPS {
+        let v = from + (to - from) * (i as f32 / STEPS as f32);
+        player.set_volume(v as rodio::Float);
+        std::thread::sleep(over / STEPS);
+    }
+}
+
+fn start(spec: &Spec, volume: f32) -> Result<Playing, String> {
+    let mut sink = DeviceSinkBuilder::open_default_sink().map_err(|e| e.to_string())?;
+    sink.log_on_drop(false);
+    let player = Player::connect_new(sink.mixer());
+    player.set_volume(0.0);
+    match spec {
+        Spec::Generated(kind) => player.append(GeneratedSource(ambient::Generator::new(*kind, AMBIENT_RATE))),
+        Spec::Custom(path) => {
+            let bytes = std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+            let source = Decoder::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
+            player.append(source.repeat_infinite());
+        }
+    }
+    ramp(&player, 0.0, volume, FADE_IN);
+    Ok(Playing { spec: spec.clone(), player, _sink: sink })
+}
+
+fn ambient_thread(rx: mpsc::Receiver<Option<(Spec, f32)>>) {
+    let mut current: Option<Playing> = None;
+    while let Ok(mut want) = rx.recv() {
+        // Only the newest request matters: a pause and a resume that arrive
+        // together must not fade out and back in.
+        while let Ok(newer) = rx.try_recv() {
+            want = newer;
+        }
+        match want {
+            None => {
+                if let Some(p) = current.take() {
+                    ramp(&p.player, p.player.volume() as f32, 0.0, FADE_OUT);
+                    p.player.stop();
+                }
+            }
+            Some((spec, volume)) => {
+                // Same sound still playing: just follow the volume. A sink
+                // whose stream died (the device went away over sleep) is
+                // empty, and is replaced.
+                if let Some(p) = current.as_ref() {
+                    if p.spec == spec && !p.player.empty() {
+                        p.player.set_volume(volume as rodio::Float);
+                        continue;
+                    }
+                }
+                if let Some(p) = current.take() {
+                    ramp(&p.player, p.player.volume() as f32, 0.0, FADE_OUT);
+                    p.player.stop();
+                }
+                match start(&spec, volume) {
+                    Ok(p) => current = Some(p),
+                    Err(e) => log::warn!("[audio] focus sound could not start: {e}"),
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -215,6 +339,7 @@ mod tests {
     fn manager(settings: &Settings) -> AudioManager {
         AudioManager {
             tx: mpsc::sync_channel(1).0,
+            ambient_tx: mpsc::channel().0,
             settings: Arc::new(Mutex::new(AudioSettings::from(settings))),
             picker: Arc::new(Mutex::new(pool::Picker::default())),
         }
