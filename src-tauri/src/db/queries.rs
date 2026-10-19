@@ -12,14 +12,25 @@ pub fn insert_session(
     round_type: &str,
     duration_secs: u32,
 ) -> Result<i64> {
+    insert_session_for(conn, round_type, duration_secs, None)
+}
+
+/// [`insert_session`], recorded against a task. A task id that no longer
+/// exists is stored as no task rather than failing the round.
+pub fn insert_session_for(
+    conn: &Connection,
+    round_type: &str,
+    duration_secs: u32,
+    task_id: Option<i64>,
+) -> Result<i64> {
     let started_at = unix_now();
     conn.execute(
-        "INSERT INTO sessions (started_at, round_type, duration_secs, completed)
-         VALUES (?1, ?2, ?3, 0)",
-        params![started_at, round_type, duration_secs],
+        "INSERT INTO sessions (started_at, round_type, duration_secs, completed, task_id)
+         VALUES (?1, ?2, ?3, 0, (SELECT id FROM tasks WHERE id = ?4))",
+        params![started_at, round_type, duration_secs, task_id],
     )?;
     let id = conn.last_insert_rowid();
-    log::debug!("[db] session started: id={id} type={round_type} duration={duration_secs}s");
+    log::debug!("[db] session started: id={id} type={round_type} duration={duration_secs}s task={task_id:?}");
     Ok(id)
 }
 
@@ -29,11 +40,25 @@ pub fn complete_session(
     session_id: i64,
     completed: bool,
 ) -> Result<()> {
+    finish_session(conn, session_id, completed, None)
+}
+
+/// [`complete_session`], also replacing the planned duration with the time
+/// actually spent. Flow mode lets a round run long; the statistics should
+/// count the real time, and every query already reads `duration_secs`.
+pub fn finish_session(
+    conn: &Connection,
+    session_id: i64,
+    completed: bool,
+    actual_secs: Option<u32>,
+) -> Result<()> {
     conn.execute(
-        "UPDATE sessions SET ended_at = ?1, completed = ?2 WHERE id = ?3",
-        params![unix_now(), completed as i64, session_id],
+        "UPDATE sessions SET ended_at = ?1, completed = ?2,
+                duration_secs = COALESCE(?4, duration_secs)
+         WHERE id = ?3",
+        params![unix_now(), completed as i64, session_id, actual_secs.filter(|s| *s > 0)],
     )?;
-    log::debug!("[db] session ended: id={session_id} completed={completed}");
+    log::debug!("[db] session ended: id={session_id} completed={completed} actual={actual_secs:?}");
     Ok(())
 }
 

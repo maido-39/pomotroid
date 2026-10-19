@@ -30,6 +30,10 @@ pub enum TimerCommand {
     Suspend,
     /// OS wake detected: resume from the saved elapsed position.
     WakeResume,
+    /// Flow mode for the current round: on reaching its end the engine sends
+    /// `Overtime` once and keeps counting until the round is skipped. Turning
+    /// it off during overtime ends the round on the next tick.
+    SetOvertime(bool),
     Shutdown,
 }
 
@@ -42,6 +46,8 @@ pub enum TimerEvent {
     Resumed { elapsed_secs: u32 },
     Reset,
     Suspended { elapsed_secs: u32 },
+    /// The round reached its planned end and keeps running (flow mode).
+    Overtime { total_secs: u32 },
 }
 
 /// Cheap-to-clone handle for sending commands to the engine thread.
@@ -108,6 +114,9 @@ fn run_loop(
     let mut total_secs = duration_secs;
     let mut elapsed_secs: u32 = 0;
     let mut phase = Phase::Idle;
+    // Flow mode for the round being timed, and whether its end has passed.
+    let mut overtime_ok = false;
+    let mut in_overtime = false;
 
     'engine: loop {
         let tr = match &mut phase {
@@ -115,6 +124,7 @@ fn run_loop(
             Phase::Idle => match cmd_rx.recv() {
                 Ok(TimerCommand::Start) => {
                     elapsed_secs = 0;
+                    in_overtime = false;
                     let _ = event_tx.send(TimerEvent::Started { total_secs });
                     Transition::To(Phase::Running(RunningSegment {
                         start: Instant::now(),
@@ -144,6 +154,10 @@ fn run_loop(
                     let _ = event_tx.send(TimerEvent::Complete { skipped: true });
                     Transition::Stay
                 }
+                Ok(TimerCommand::SetOvertime(on)) => {
+                    overtime_ok = on;
+                    Transition::Stay
+                }
                 Ok(TimerCommand::Shutdown) | Err(_) => Transition::Break,
                 _ => Transition::Stay,
             },
@@ -160,23 +174,36 @@ fn run_loop(
                 }
                 Ok(TimerCommand::Reset) => {
                     elapsed_secs = 0;
+                    in_overtime = false;
                     let _ = event_tx.send(TimerEvent::Reset);
                     Transition::To(Phase::Idle)
                 }
                 Ok(TimerCommand::Skip) => {
+                    // Past the planned end the work was done: moving on
+                    // completes the round rather than skipping it.
+                    let skipped = elapsed_secs < total_secs;
                     elapsed_secs = 0;
-                    let _ = event_tx.send(TimerEvent::Complete { skipped: true });
+                    in_overtime = false;
+                    let _ = event_tx.send(TimerEvent::Complete { skipped });
                     Transition::To(Phase::Idle)
                 }
                 Ok(TimerCommand::Reconfigure { duration_secs: d }) => {
                     total_secs = d;
                     elapsed_secs = 0;
+                    in_overtime = false;
                     Transition::To(Phase::Idle)
                 }
                 Ok(TimerCommand::Prime { duration_secs: d }) => {
                     // Clamp so a stale Prime never causes immediate completion
-                    // on the next Resume tick.
-                    total_secs = d.max(elapsed_secs.saturating_add(1));
+                    // on the next Resume tick. In overtime the planned end has
+                    // already passed and must stay where it was.
+                    if !in_overtime {
+                        total_secs = d.max(elapsed_secs.saturating_add(1));
+                    }
+                    Transition::Stay
+                }
+                Ok(TimerCommand::SetOvertime(on)) => {
+                    overtime_ok = on;
                     Transition::Stay
                 }
                 Ok(TimerCommand::Shutdown) | Err(_) => Transition::Break,
@@ -197,12 +224,19 @@ fn run_loop(
                         elapsed_secs = seg.elapsed_at_start + seg.ticks;
                         let _ = event_tx.send(TimerEvent::Tick { elapsed_secs, total_secs });
 
-                        if elapsed_secs >= total_secs {
+                        if elapsed_secs < total_secs {
+                            Transition::Stay
+                        } else if overtime_ok {
+                            if !in_overtime {
+                                in_overtime = true;
+                                let _ = event_tx.send(TimerEvent::Overtime { total_secs });
+                            }
+                            Transition::Stay
+                        } else {
                             let _ = event_tx.send(TimerEvent::Complete { skipped: false });
                             elapsed_secs = 0;
+                            in_overtime = false;
                             Transition::To(Phase::Idle)
-                        } else {
-                            Transition::Stay
                         }
                     }
                     Err(RecvTimeoutError::Disconnected) => Transition::Break,
@@ -217,25 +251,35 @@ fn run_loop(
                         Transition::To(Phase::Suspended)
                     }
                     Ok(TimerCommand::Skip) => {
+                        let skipped = elapsed_secs < total_secs;
                         elapsed_secs = 0;
-                        let _ = event_tx.send(TimerEvent::Complete { skipped: true });
+                        in_overtime = false;
+                        let _ = event_tx.send(TimerEvent::Complete { skipped });
                         Transition::To(Phase::Idle)
                     }
                     Ok(TimerCommand::Reset) => {
                         elapsed_secs = 0;
+                        in_overtime = false;
                         let _ = event_tx.send(TimerEvent::Reset);
                         Transition::To(Phase::Idle)
                     }
                     Ok(TimerCommand::Reconfigure { duration_secs: d }) => {
                         total_secs = d;
                         elapsed_secs = 0;
+                        in_overtime = false;
                         Transition::To(Phase::Idle)
                     }
                     Ok(TimerCommand::Prime { duration_secs: d }) => {
                         // Clamp so a stale Prime arriving while the timer is
                         // running never causes an immediate spurious completion
-                        // on the next tick.
-                        total_secs = d.max(elapsed_secs.saturating_add(1));
+                        // on the next tick. In overtime the end stays put.
+                        if !in_overtime {
+                            total_secs = d.max(elapsed_secs.saturating_add(1));
+                        }
+                        Transition::Stay
+                    }
+                    Ok(TimerCommand::SetOvertime(on)) => {
+                        overtime_ok = on;
                         Transition::Stay
                     }
                     Ok(TimerCommand::Shutdown) => Transition::Break,
@@ -646,5 +690,85 @@ mod tests {
             wall <= nominal + Duration::from_millis(200),
             "drift exceeded tolerance: {wall:?} for nominal {nominal:?}"
         );
+    }
+
+    // --- Flow mode ---------------------------------------------------------
+
+    #[test]
+    fn overtime_keeps_counting_past_the_end_and_says_so_once() {
+        let (handle, rx) = spawn(2, TICK);
+        handle.send(TimerCommand::SetOvertime(true));
+        handle.send(TimerCommand::Start);
+        let events = wait_for_ticks(&rx, 5);
+        let overtime = events.iter().filter(|e| matches!(e, TimerEvent::Overtime { .. })).count();
+        assert_eq!(overtime, 1, "{events:?}");
+        assert!(!events.iter().any(|e| matches!(e, TimerEvent::Complete { .. })), "{events:?}");
+        assert!(last_elapsed(&events) >= 5);
+        handle.send(TimerCommand::Shutdown);
+    }
+
+    #[test]
+    fn moving_on_from_overtime_completes_the_round() {
+        let (handle, rx) = spawn(1, TICK);
+        handle.send(TimerCommand::SetOvertime(true));
+        handle.send(TimerCommand::Start);
+        collect_until(&rx, |e| matches!(e, TimerEvent::Overtime { .. }));
+        handle.send(TimerCommand::Skip);
+        let events = collect_until(&rx, |e| matches!(e, TimerEvent::Complete { .. }));
+        assert!(
+            matches!(events.last(), Some(TimerEvent::Complete { skipped: false })),
+            "{events:?}"
+        );
+        handle.send(TimerCommand::Shutdown);
+    }
+
+    #[test]
+    fn skipping_before_the_end_is_still_a_skip_in_flow_mode() {
+        let (handle, rx) = spawn(30, TICK);
+        handle.send(TimerCommand::SetOvertime(true));
+        handle.send(TimerCommand::Start);
+        wait_for_ticks(&rx, 1);
+        handle.send(TimerCommand::Skip);
+        let events = collect_until(&rx, |e| matches!(e, TimerEvent::Complete { .. }));
+        assert!(matches!(events.last(), Some(TimerEvent::Complete { skipped: true })), "{events:?}");
+        handle.send(TimerCommand::Shutdown);
+    }
+
+    #[test]
+    fn turning_flow_off_during_overtime_ends_the_round() {
+        let (handle, rx) = spawn(1, TICK);
+        handle.send(TimerCommand::SetOvertime(true));
+        handle.send(TimerCommand::Start);
+        collect_until(&rx, |e| matches!(e, TimerEvent::Overtime { .. }));
+        handle.send(TimerCommand::SetOvertime(false));
+        let events = collect_until(&rx, |e| matches!(e, TimerEvent::Complete { .. }));
+        assert!(matches!(events.last(), Some(TimerEvent::Complete { skipped: false })), "{events:?}");
+        handle.send(TimerCommand::Shutdown);
+    }
+
+    #[test]
+    fn a_prime_during_overtime_does_not_move_the_end() {
+        let (handle, rx) = spawn(1, TICK);
+        handle.send(TimerCommand::SetOvertime(true));
+        handle.send(TimerCommand::Start);
+        collect_until(&rx, |e| matches!(e, TimerEvent::Overtime { .. }));
+        handle.send(TimerCommand::Prime { duration_secs: 500 });
+        let events = wait_for_ticks(&rx, 2);
+        for e in &events {
+            if let TimerEvent::Tick { total_secs, .. } = e {
+                assert_eq!(*total_secs, 1, "{events:?}");
+            }
+        }
+        handle.send(TimerCommand::Shutdown);
+    }
+
+    #[test]
+    fn without_flow_mode_the_round_ends_on_time() {
+        let (handle, rx) = spawn(2, TICK);
+        handle.send(TimerCommand::Start);
+        let events = collect_until(&rx, |e| matches!(e, TimerEvent::Complete { .. }));
+        assert!(!events.iter().any(|e| matches!(e, TimerEvent::Overtime { .. })));
+        assert!(matches!(events.last(), Some(TimerEvent::Complete { skipped: false })));
+        handle.send(TimerCommand::Shutdown);
     }
 }

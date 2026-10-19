@@ -64,4 +64,13 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("bg_image_pos_y", "50"),
     ("bg_image_zoom", "100"),
     ("bg_image_name", ""),
+    ("daily_goal", "0"),
+    ("flow_mode", "false"),
+    ("ambient_sound", "off"),
+    ("ambient_volume", "40"),
+    ("ambient_in_breaks", "false"),
+    ("ambient_custom_name", ""),
+    ("presets", crate::settings::DEFAULT_PRESETS_JSON),
+    ("active_task", "0"),
+    ("notes_prompt", "true"),
 ];

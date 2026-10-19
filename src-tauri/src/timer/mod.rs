@@ -64,6 +64,12 @@ pub fn wants_always_on_top(settings: &Settings, round: RoundType) -> bool {
     settings.always_on_top && !(settings.break_always_on_top && round != RoundType::Work)
 }
 
+/// Flow mode applies to focus rounds only: a break that runs on is just a
+/// longer break, and nobody asked for that.
+pub fn wants_overtime(settings: &Settings, round: RoundType) -> bool {
+    settings.flow_mode && round == RoundType::Work
+}
+
 pub struct TimerController {
     engine: EngineHandle,
     sequence: Arc<Mutex<SequenceState>>,
@@ -87,6 +93,7 @@ impl TimerController {
         let duration = seq.current_duration_secs(&settings);
 
         let (engine, event_rx) = engine::spawn(duration, Duration::from_secs(1));
+        engine.send(TimerCommand::SetOvertime(wants_overtime(&settings, seq.current_round)));
 
         let sequence = Arc::new(Mutex::new(seq));
         let settings_arc = Arc::new(Mutex::new(settings));
@@ -234,7 +241,12 @@ impl TimerController {
     pub fn apply_settings(&self, new: Settings) {
         // Sync work_rounds_total so the round counter and advance() logic both
         // reflect the new long_break_interval immediately.
-        self.sequence.lock().unwrap().work_rounds_total = new.long_break_interval;
+        let round = {
+            let mut seq = self.sequence.lock().unwrap();
+            seq.work_rounds_total = new.long_break_interval;
+            seq.current_round
+        };
+        self.engine.send(TimerCommand::SetOvertime(wants_overtime(&new, round)));
         *self.settings.lock().unwrap() = new;
         let s = self.shared.lock().unwrap();
         let is_idle = !s.is_running && s.elapsed_secs == 0;
@@ -300,13 +312,16 @@ fn listen_events(
                 // --- Session recording: start on first tick of a new round ---
                 if elapsed_secs == 1 && current_session_id.is_none() {
                     let rt = sequence.lock().unwrap().current_round.as_str().to_string();
-                    let total = {
+                    let (total, task) = {
                         let seq = sequence.lock().unwrap();
                         let s = settings.lock().unwrap();
-                        seq.current_duration_secs(&s)
+                        // Breaks are not work on anything.
+                        let task = (seq.current_round == RoundType::Work && s.active_task > 0)
+                            .then_some(s.active_task);
+                        (seq.current_duration_secs(&s), task)
                     };
                     if let Ok(conn) = db.lock() {
-                        match queries::insert_session(&conn, &rt, total) {
+                        match queries::insert_session_for(&conn, &rt, total, task) {
                             Ok(id) => current_session_id = Some(id),
                             Err(e) => log::error!("[timer] failed to record session: {e}"),
                         }
@@ -322,8 +337,9 @@ fn listen_events(
                 }
 
                 // Update tray arc — throttle to 1% visual change.
+                // Overtime runs past the end; the ring stays full.
                 let progress = if total_secs > 0 {
-                    elapsed_secs as f32 / total_secs as f32
+                    (elapsed_secs as f32 / total_secs as f32).min(1.0)
                 } else {
                     0.0
                 };
@@ -340,9 +356,19 @@ fn listen_events(
                 );
 
                 // --- Session recording: mark the completed round ---
+                // A flow round that ran past its end records the time spent.
+                let actual = {
+                    let planned = {
+                        let seq = sequence.lock().unwrap();
+                        let s = settings.lock().unwrap();
+                        seq.current_duration_secs(&s)
+                    };
+                    let spent = shared.lock().unwrap().elapsed_secs;
+                    (!was_skipped && spent > planned).then_some(spent)
+                };
                 if let Some(session_id) = current_session_id.take() {
                     if let Ok(conn) = db.lock() {
-                        let _ = queries::complete_session(&conn, session_id, !was_skipped);
+                        let _ = queries::finish_session(&conn, session_id, !was_skipped, actual);
                     }
                     // Stats views (local and on paired phones) refresh on this.
                     let _ = app.emit("sessions:changed", ());
@@ -362,6 +388,10 @@ fn listen_events(
                     s.elapsed_secs = 0;
                     s.is_running = false;
                 }
+
+                // Flow mode follows the round: on for focus, off for breaks.
+                let overtime = wants_overtime(&settings.lock().unwrap(), next_round);
+                engine.send(TimerCommand::SetOvertime(overtime));
 
                 // Arm the next round's duration without risking a late
                 // reconfigure that kicks a freshly-started timer back to Idle.
@@ -438,6 +468,21 @@ fn listen_events(
                     // Reset the tray menu to "Start" so it doesn't keep showing
                     // "Pause" from the round that just completed.
                     tray::update_menu_items(&tray, false, false);
+                }
+            }
+
+            TimerEvent::Overtime { total_secs } => {
+                log::info!("[timer] overtime after {total_secs}s (flow mode)");
+                let _ = app.emit("timer:overtime", serde_json::json!({ "total_secs": total_secs }));
+                // The round is over in all but name: say so the way a round
+                // change would, with the sound of the break that is waiting.
+                if let Some(audio) = app.try_state::<Arc<AudioManager>>() {
+                    let next = sequence.lock().unwrap().peek_next(&settings.lock().unwrap());
+                    audio.play_cue(match next {
+                        RoundType::Work => AudioCue::WorkAlert,
+                        RoundType::ShortBreak => AudioCue::ShortBreakAlert,
+                        RoundType::LongBreak => AudioCue::LongBreakAlert,
+                    });
                 }
             }
 

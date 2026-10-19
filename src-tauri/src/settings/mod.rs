@@ -10,7 +10,74 @@ pub const CLOCK_STYLES: &[&str] = &["dial", "digital", "edge", "flip", "analog"]
 
 /// The parts of the timer a user can move or hide. The clock is not among
 /// them: it is the point of the window and always shows.
-pub const LAYOUT_ELEMENTS: &[&str] = &["label", "controls", "footer"];
+pub const LAYOUT_ELEMENTS: &[&str] = &["label", "controls", "footer", "info"];
+
+/// Focus sounds the app can generate. "custom" plays the user's own file;
+/// anything else is ignored on load and means off.
+pub const AMBIENT_SOUNDS: &[&str] = &["off", "white", "pink", "brown", "rain", "waves", "custom"];
+
+/// Most presets kept; the list is shown as chips, and past a dozen it stops
+/// being a quick switch.
+pub const MAX_PRESETS: usize = 12;
+/// Longest name a preset may have, in characters.
+pub const MAX_PRESET_NAME: usize = 32;
+
+/// A named set of durations that can be applied in one go.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Preset {
+    pub name: String,
+    pub work_secs: u32,
+    pub short_break_secs: u32,
+    pub long_break_secs: u32,
+    pub long_break_interval: u32,
+}
+
+impl Preset {
+    /// Within the ranges the timer settings themselves allow, or `None` for a
+    /// preset that cannot be applied (no name, a zero duration).
+    fn sane(self) -> Option<Self> {
+        let name: String = self.name.trim().chars().take(MAX_PRESET_NAME).collect();
+        if name.is_empty() || self.work_secs == 0 || self.short_break_secs == 0 || self.long_break_secs == 0 {
+            return None;
+        }
+        Some(Self {
+            name,
+            work_secs: self.work_secs.clamp(60, 4 * 3600),
+            short_break_secs: self.short_break_secs.clamp(60, 4 * 3600),
+            long_break_secs: self.long_break_secs.clamp(60, 4 * 3600),
+            long_break_interval: self.long_break_interval.clamp(1, 12),
+        })
+    }
+}
+
+/// The presets a fresh install offers: the classic 25/5, a longer block for
+/// deep work, and the 90-minute cycle some people swear by.
+pub fn default_presets() -> Vec<Preset> {
+    serde_json::from_str(DEFAULT_PRESETS_JSON).unwrap_or_default()
+}
+
+/// Stored form of [`default_presets`]; also what the migration seeds.
+pub const DEFAULT_PRESETS_JSON: &str = r#"[{"name":"Classic","work_secs":1500,"short_break_secs":300,"long_break_secs":900,"long_break_interval":4},{"name":"Deep work","work_secs":3000,"short_break_secs":600,"long_break_secs":1800,"long_break_interval":3},{"name":"90 / 20","work_secs":5400,"short_break_secs":1200,"long_break_secs":1800,"long_break_interval":2}]"#;
+
+/// Read a stored preset list: invalid entries are dropped, a name used twice
+/// keeps its first entry, and the list is capped. Unreadable means the
+/// defaults, so a hand-edited row cannot leave the switcher empty by accident.
+pub fn parse_presets(raw: &str) -> Vec<Preset> {
+    let Ok(list) = serde_json::from_str::<Vec<Preset>>(raw) else {
+        return default_presets();
+    };
+    let mut out: Vec<Preset> = Vec::new();
+    for p in list.into_iter().filter_map(Preset::sane) {
+        if out.iter().any(|q| q.name.eq_ignore_ascii_case(&p.name)) {
+            continue;
+        }
+        out.push(p);
+        if out.len() == MAX_PRESETS {
+            break;
+        }
+    }
+    out
+}
 
 /// Where each movable part of the timer sits.
 ///
@@ -79,7 +146,7 @@ impl Layout {
 
 /// All user-configurable settings, fully typed.
 ///
-/// Time fields are in **seconds** (converted from stored minutes).
+/// Time fields are in **seconds**, as stored.
 /// `volume` is in the **0.0–1.0** range (converted from stored 0–100).
 ///
 /// This struct is serialized to JSON and sent to the Svelte frontend via Tauri IPC.
@@ -176,6 +243,25 @@ pub struct Settings {
     pub bg_rotate_on_round: bool,
     /// Change picture every N minutes regardless of the timer; 0 is off.
     pub bg_rotate_mins: u32,
+    /// Completed focus rounds aimed for each day; 0 means no goal.
+    pub daily_goal: u32,
+    /// Let a focus round run past its end until the user moves on, recording
+    /// the time actually spent.
+    pub flow_mode: bool,
+    /// Focus sound played while a focus round runs (see `AMBIENT_SOUNDS`).
+    pub ambient_sound: String,
+    /// Focus sound volume, 0–100, separate from the alert volume.
+    pub ambient_volume: u32,
+    /// Keep the focus sound playing through breaks too.
+    pub ambient_in_breaks: bool,
+    /// Original file name of the custom focus sound ("" = none).
+    pub ambient_custom_name: String,
+    /// Named duration sets for the quick switcher.
+    pub presets: Vec<Preset>,
+    /// Task new focus rounds are recorded against; 0 means none.
+    pub active_task: i64,
+    /// Offer a one-line note for each focus round once it ends.
+    pub notes_prompt: bool,
     pub language: String,
     pub verbose_logging: bool,
     pub check_for_updates: bool,
@@ -265,6 +351,15 @@ impl Default for Settings {
             bg_shuffle: true,
             bg_rotate_on_round: true,
             bg_rotate_mins: 0,
+            daily_goal: 0,
+            flow_mode: false,
+            ambient_sound: "off".to_string(),
+            ambient_volume: 40,
+            ambient_in_breaks: false,
+            ambient_custom_name: String::new(),
+            presets: default_presets(),
+            active_task: 0,
+            notes_prompt: true,
             language: "auto".to_string(),
             verbose_logging: false,
             check_for_updates: true,
@@ -421,6 +516,24 @@ pub fn load(conn: &Connection) -> Result<Settings> {
         // A day is already far past "a slideshow"; the cap keeps a typo from
         // parking the rotation for a week.
         bg_rotate_mins: parse_u32(&map, "bg_rotate_mins", d.bg_rotate_mins).min(1440),
+        // Two dozen hours of focus a day is already more than anyone does.
+        daily_goal: parse_u32(&map, "daily_goal", d.daily_goal).min(48),
+        flow_mode: parse_bool(&map, "flow_mode", d.flow_mode),
+        ambient_sound: map
+            .get("ambient_sound")
+            .filter(|v| AMBIENT_SOUNDS.contains(&v.as_str()))
+            .cloned()
+            .unwrap_or(d.ambient_sound),
+        ambient_volume: parse_u32(&map, "ambient_volume", d.ambient_volume).min(100),
+        ambient_in_breaks: parse_bool(&map, "ambient_in_breaks", d.ambient_in_breaks),
+        ambient_custom_name: map.get("ambient_custom_name").cloned().unwrap_or(d.ambient_custom_name),
+        presets: map.get("presets").map(|raw| parse_presets(raw)).unwrap_or(d.presets),
+        active_task: map
+            .get("active_task")
+            .and_then(|v| v.parse::<i64>().ok())
+            .filter(|id| *id >= 0)
+            .unwrap_or(d.active_task),
+        notes_prompt: parse_bool(&map, "notes_prompt", d.notes_prompt),
         language: map.get("language").cloned().unwrap_or(d.language),
         verbose_logging: parse_bool(&map, "verbose_logging", d.verbose_logging),
         check_for_updates: parse_bool(&map, "check_for_updates", d.check_for_updates),
@@ -614,7 +727,9 @@ mod tests {
         // Simulate a pre-migration DB: schema version 1, `*_mins` keys present.
         let conn = Connection::open_in_memory().unwrap();
         // Run only migration 1 manually to get v1 state.
-        conn.execute_batch("BEGIN; CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL); INSERT INTO schema_version VALUES (1); COMMIT;").unwrap();
+        // A real version-1 database also has the sessions table, which later
+        // migrations extend.
+        conn.execute_batch("BEGIN; CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at INTEGER NOT NULL, ended_at INTEGER, round_type TEXT NOT NULL, duration_secs INTEGER NOT NULL, completed INTEGER NOT NULL DEFAULT 0); INSERT INTO schema_version VALUES (1); COMMIT;").unwrap();
         conn.execute("INSERT INTO settings (key, value) VALUES ('time_work_mins', '30')", []).unwrap();
         conn.execute("INSERT INTO settings (key, value) VALUES ('time_short_break_mins', '7')", []).unwrap();
         conn.execute("INSERT INTO settings (key, value) VALUES ('time_long_break_mins', '20')", []).unwrap();
@@ -646,7 +761,7 @@ mod tests {
         let conn = setup();
         seed_defaults(&conn).unwrap();
         assert_eq!(load(&conn).unwrap().layout, Layout::default());
-        assert_eq!(Layout::default().below, vec!["label", "controls", "footer"]);
+        assert_eq!(Layout::default().below, vec!["label", "controls", "footer", "info"]);
     }
 
     #[test]
@@ -657,7 +772,8 @@ mod tests {
             .unwrap();
         let l = load(&conn).unwrap().layout;
         assert_eq!(l.above, vec!["label"]);
-        assert_eq!(l.below, vec!["controls"]);
+        // `info` came later than this layout, so it is added below the clock.
+        assert_eq!(l.below, vec!["controls", "info"]);
         assert_eq!(l.hidden, vec!["footer"]);
     }
 
@@ -667,7 +783,7 @@ mod tests {
         // missing comes back below the clock.
         let l = Layout::parse(r#"{"above":["label","bogus"],"below":["label"],"hidden":[]}"#);
         assert_eq!(l.above, vec!["label"]);
-        assert_eq!(l.below, vec!["controls", "footer"], "missing elements return, in their usual order");
+        assert_eq!(l.below, vec!["controls", "footer", "info"], "missing elements return, in their usual order");
         assert!(l.hidden.is_empty());
 
         let total = l.above.len() + l.below.len() + l.hidden.len();

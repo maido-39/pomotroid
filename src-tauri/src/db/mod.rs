@@ -1,3 +1,4 @@
+pub mod focus;
 pub mod migrations;
 pub mod queries;
 

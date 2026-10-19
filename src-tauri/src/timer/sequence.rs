@@ -119,6 +119,11 @@ impl SequenceState {
         (self.current_round, duration)
     }
 
+    /// The round `advance` would move to, without moving.
+    pub fn peek_next(&self, settings: &Settings) -> RoundType {
+        self.clone().advance(settings).0
+    }
+
     /// Reset the sequence to the initial state (used by the Reset command).
     pub fn reset(&mut self) {
         self.current_round = RoundType::Work;

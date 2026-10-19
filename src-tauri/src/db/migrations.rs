@@ -209,6 +209,35 @@ const MIGRATION_16: &str = r#"
     INSERT INTO schema_version VALUES (16);
 "#;
 
+/// Focus tools: tasks, notes, the daily goal, flow mode, focus sounds and
+/// duration presets.
+///
+/// Sessions gain a task and a note; both stay NULL for every round recorded
+/// before, which the statistics read as "no task" and "no note". Every new
+/// setting starts in the state that changes nothing — no goal, no flow, no
+/// sound, no active task — except the presets, which only add a switcher.
+const MIGRATION_17: &str = r#"
+    CREATE TABLE IF NOT EXISTS tasks (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        color      TEXT NOT NULL DEFAULT '',
+        archived   INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0, 1)),
+        created_at INTEGER NOT NULL
+    );
+    ALTER TABLE sessions ADD COLUMN task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL;
+    ALTER TABLE sessions ADD COLUMN note TEXT;
+    CREATE INDEX IF NOT EXISTS idx_sessions_task_id ON sessions(task_id);
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('daily_goal', '0');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('flow_mode', 'false');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('ambient_sound', 'off');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('ambient_volume', '40');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('ambient_in_breaks', 'false');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('ambient_custom_name', '');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('active_task', '0');
+    INSERT OR IGNORE INTO settings (key, value) VALUES ('notes_prompt', 'true');
+    INSERT INTO schema_version VALUES (17);
+"#;
+
 /// Apply any pending migrations. Each migration is wrapped in a transaction
 /// so a partial failure leaves the database unchanged.
 pub fn run(conn: &Connection) -> Result<()> {
@@ -310,6 +339,25 @@ pub fn run(conn: &Connection) -> Result<()> {
         log::info!("[db/migrations] MIGRATION_16 complete");
     }
 
+    if version < 17 {
+        log::info!("[db/migrations] applying MIGRATION_17: tasks, notes and focus tools");
+        // The preset list is JSON; bind it rather than splice it into SQL.
+        let applied = conn
+            .execute_batch(&format!("BEGIN; {MIGRATION_17}"))
+            .and_then(|_| {
+                conn.execute(
+                    "INSERT OR IGNORE INTO settings (key, value) VALUES ('presets', ?1)",
+                    [crate::settings::DEFAULT_PRESETS_JSON],
+                )
+            })
+            .and_then(|_| conn.execute_batch("COMMIT;"));
+        if let Err(e) = applied {
+            let _ = conn.execute_batch("ROLLBACK;");
+            return Err(e);
+        }
+        log::info!("[db/migrations] MIGRATION_17 complete");
+    }
+
     Ok(())
 }
 
@@ -345,7 +393,7 @@ mod tests {
         let v: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 16);
+        assert_eq!(v, 17);
     }
 
     #[test]
