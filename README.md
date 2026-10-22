@@ -30,6 +30,7 @@ Built with [Tauri 2](https://tauri.app), [Rust](https://www.rust-lang.org), and 
 ## Features
 
 - **Configurable timer** — customise work duration, break durations, and the number of rounds per long break
+- **Focus tools** — tasks, a daily goal with streak, a note after each round, flow mode, one-click presets, the round's finish time, and generated focus sounds (white, pink and brown noise, rain, waves)
 - **Statistics** — daily, weekly, and all-time session history with charts and a 52-week heatmap
 - **38 bundled themes** — including Dracula, Nord, Tokyo Night, Catppuccin, Gruvbox, Rose Piné, and more; auto-switches with your OS light/dark preference
 - **Custom themes** — drop a JSON file into the themes folder; applied instantly without a restart
